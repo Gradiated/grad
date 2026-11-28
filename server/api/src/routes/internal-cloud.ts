@@ -30,12 +30,15 @@ import {
 import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
 import { log } from "../telemetry/log.js";
-import { readJson } from "./helpers.js";
+import { optionalJson, readJson } from "./helpers.js";
 
 const CLOUD_SERVICE_SCOPES = ["workspaces:admin", "artifacts:pin"] as const;
 type ServiceScope = (typeof CLOUD_SERVICE_SCOPES)[number];
 
 const WORKSPACE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** PUT …/pins/{holder}'s optional body: a reason (anything else is ignored). */
+const PinBodySchema = z.looseObject({ reason: z.unknown().optional() });
 
 const StateSchema = z.strictObject({
   state: z.enum(["active", "suspended", "deleted"]),
@@ -162,9 +165,7 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
       );
       const holder = holderOf(c);
       const artifact = await release(workspaceId, c.req.param("id"));
-      const body = (await c.req.json().catch(() => ({}))) as {
-        reason?: unknown;
-      };
+      const body = await optionalJson(c, PinBodySchema);
       const reason =
         typeof body.reason === "string" && body.reason.trim()
           ? body.reason.trim().slice(0, 500)

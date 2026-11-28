@@ -339,6 +339,29 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
     expect(pinnedBody.artifact.pins.map((p) => p.holder)).toEqual([holder]);
     expect((await pin(artifact.id, holder)).status).toBe(200);
     expect((await pin(artifact.id, "bad holder")).status).toBe(422);
+    // An optional body: a reason, or nothing usable (never a 500).
+    const withBody = (body: string) =>
+      internal.request(
+        `/internal/v1/workspaces/${WORKSPACE_A}/artifacts/${pinPath(artifact.id, "inference:version:v2")}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body,
+        },
+      );
+    const reasoned = await withBody('{"reason":"published v2"}');
+    expect(reasoned.status).toBe(201);
+    expect(
+      ((await reasoned.json()) as { pin: { reason: string } }).pin,
+    ).toMatchObject({
+      reason: "published v2",
+    });
+    expect((await withBody("null")).status).toBe(422);
+    expect((await withBody("{nope")).status).toBe(400);
+    expect((await unpin(artifact.id, "inference:version:v2")).status).toBe(204);
     expect(
       (await t.json(`/v1/artifacts/${artifact.id}`, { method: "DELETE" }))
         .status,
