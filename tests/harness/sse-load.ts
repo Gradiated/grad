@@ -3,7 +3,7 @@
  *
  *   pnpm -C server/api exec tsx ../../tests/harness/sse-load.ts
  *     [--streams 1000] [--jobs 50] [--seconds 30] [--baseline-seconds 10]
- *     [--path events|metrics]
+ *     [--slow 0] [--reconnect]
  *
  * Boots the stack (no worker), creates `--jobs` runs and claims them with a
  * fake worker, mints one read key per job (the per-key stream cap is 20), and
@@ -17,6 +17,12 @@
  * p50/p95/p99 (metric `timestamp` set when the progress POST is sent, to
  * receipt; `write_rtt_ms` and `write_server_ms` are that POST's own round
  * trip and mean server time), and events lost or duplicated per stream.
+ * `--slow N` also opens N streams that stop reading after their first bytes
+ * (slow consumers: the replica's memory must stay bounded). `--reconnect`
+ * then drops every stream at once and reopens it with Last-Event-ID (a
+ * reconnect storm, e.g. a replica restart): `reconnect` reports how long they
+ * took to attach and the queries they cost, and lost/duplicated span both
+ * connections.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -34,14 +40,15 @@ const { values: args } = parseArgs({
     jobs: { type: "string", default: "50" },
     seconds: { type: "string", default: "30" },
     "baseline-seconds": { type: "string", default: "10" },
-    path: { type: "string", default: "events" },
+    slow: { type: "string", default: "0" },
+    reconnect: { type: "boolean", default: false },
   },
 });
+const SLOW = Number(args.slow);
 const STREAMS = Number(args.streams);
 const JOBS = Number(args.jobs);
 const SECONDS = Number(args.seconds);
 const BASELINE = Number(args["baseline-seconds"]);
-const PATH = args.path === "metrics" ? "metrics" : "events";
 
 interface Stack {
   base_url: string;
@@ -56,7 +63,15 @@ const bootStack = async () => {
   const child = spawn(
     process.execPath,
     ["--import", "tsx", "../../tests/harness/stack.ts", "--worker", "none"],
-    { cwd: apiDir, stdio: ["pipe", "pipe", "inherit"] },
+    {
+      cwd: apiDir,
+      stdio: ["pipe", "pipe", "inherit"],
+      // Every job runs in one workspace: lift the per-workspace running cap.
+      env: {
+        ...process.env,
+        GRAD_MAX_RUNNING_PER_WORKSPACE_TRAIN: String(Math.max(8, JOBS)),
+      },
+    },
   );
   const line = await new Promise<string>((ok, fail) => {
     const rl = createInterface({ input: child.stdout! });
@@ -148,13 +163,16 @@ const openStream = (
   stats: StreamStats,
   measuring: () => boolean,
   signal: AbortSignal,
+  slow = false,
 ) =>
   (async () => {
     try {
-      const res = await fetch(`${stack.base_url}/v1/runs/${runId}/${PATH}`, {
+      const last = stats.seqs.at(-1);
+      const res = await fetch(`${stack.base_url}/v1/runs/${runId}/events`, {
         headers: {
           Authorization: `Bearer ${key}`,
           Accept: "text/event-stream",
+          ...(last === undefined ? {} : { "Last-Event-ID": String(last) }),
         },
         signal,
       });
@@ -163,6 +181,8 @@ const openStream = (
         return;
       }
       stats.opened = true;
+      // A slow consumer reads nothing more: the socket fills and stays open.
+      if (slow) return await new Promise(() => undefined);
       const decoder = new TextDecoder();
       let buffer = "";
       for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
@@ -225,6 +245,15 @@ const main = async () => {
         scopes: ["runs:read"],
       });
       keys.push(key.secret);
+    }
+    // Slow streams get keys of their own (the per-key stream cap is 20).
+    const slowKeys: string[] = [];
+    for (let i = 0; i < Math.ceil(SLOW / 20); i += 1) {
+      const key = await api<{ secret: string }>(stack, "/v1/keys", admin, {
+        name: `slow-${i}`,
+        scopes: ["runs:read"],
+      });
+      slowKeys.push(key.secret);
     }
     const jobs: Array<{ id: string; attempt: number; worker: string }> = [];
     for (let i = 0; i < JOBS; i += 1) {
@@ -325,17 +354,70 @@ const main = async () => {
     );
     while (stats.some((s) => !s.opened && !s.error)) await sleep(50);
     const attachMs = Date.now() - attachStart;
+    const slowAbort = new AbortController();
+    const slowStats: StreamStats[] = Array.from({ length: SLOW }, (_, i) => ({
+      job: i % JOBS,
+      seqs: [],
+      latencies: [],
+      opened: false,
+      error: null,
+    }));
+    for (const [i, s] of slowStats.entries()) {
+      void openStream(
+        stack,
+        runs[s.job] as string,
+        slowKeys[Math.floor(i / 20)] as string,
+        s,
+        () => false,
+        slowAbort.signal,
+        true,
+      );
+    }
     await sleep(3000);
     measuring = true;
     const firstSteps = steps.map((n) => n + 1);
     const loaded = await measureWindow(SECONDS);
     measuring = false;
+
+    let reconnect: Record<string, unknown> | null = null;
+    let current = abort;
+    let streams = done;
+    if (args.reconnect) {
+      abort.abort();
+      await Promise.allSettled(done);
+      const m0 = await scrape(stack);
+      const t0 = Date.now();
+      for (const s of stats) s.opened = false;
+      current = new AbortController();
+      const again = current;
+      streams = stats.map((s) =>
+        openStream(
+          stack,
+          runs[s.job] as string,
+          keys[s.job] as string,
+          s,
+          () => false,
+          again.signal,
+        ),
+      );
+      while (stats.some((s) => !s.opened && !s.error)) await sleep(50);
+      const reattachMs = Date.now() - t0;
+      await sleep(5000);
+      reconnect = {
+        reattach_all_ms: reattachMs,
+        db_queries_first_5s: Math.round(
+          (await scrape(stack)).queries - m0.queries,
+        ),
+        api_rss_mb: rssMb(pid),
+      };
+    }
     const lastSteps = [...steps];
     writing = false;
     await writer;
     await sleep(3000);
-    abort.abort();
-    await Promise.allSettled(done);
+    current.abort();
+    slowAbort.abort();
+    await Promise.allSettled(streams);
 
     // Every stream must hold each step its job wrote in the window, once.
     let lost = 0;
@@ -359,9 +441,11 @@ const main = async () => {
 
     process.stdout.write(
       `${JSON.stringify({
-        path: PATH,
         streams: STREAMS,
         jobs: JOBS,
+        slow_streams: SLOW,
+        slow_opened: slowStats.filter((s) => s.opened).length,
+        reconnect,
         stream_errors: stats.filter((s) => s.error).length,
         first_error: stats.find((s) => s.error)?.error ?? null,
         attach_all_ms: attachMs,
