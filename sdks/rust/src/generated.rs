@@ -606,19 +606,29 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EvalModelSummary {
+    /// The model this summary is for.
     pub model: String,
+    /// Mean task score (each task's score averages its samples).
     pub overall: f64,
+    /// Lower bound of the bootstrap 95% confidence interval on `overall`.
     pub ci_low: f64,
+    /// Upper bound of the bootstrap 95% confidence interval on `overall`.
     pub ci_high: f64,
+    /// Unbiased pass@k per k (`pass@1`, ...): the chance that one of k samples scores at least `pass_threshold`.
     pub pass_at_k: BTreeMap<String, f64>,
+    /// The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval; null for the baseline itself or without one.
     pub vs_baseline: Option<EvalModelSummaryVsBaseline>,
+    /// Tasks this model answered.
     pub tasks: i64,
+    /// Model or judge calls that failed.
     pub errors: i64,
+    /// Mean tokens per task.
     pub tokens_per_task: f64,
+    /// Cost per 1,000 tasks in USD; null when the model has no price.
     pub cost_per_1k_tasks_usd: Option<f64>,
 }
 
-/// Generated from the OpenAPI schema `EvalModelSummaryVsBaseline`.
+/// The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval; null for the baseline itself or without one.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EvalModelSummaryVsBaseline {

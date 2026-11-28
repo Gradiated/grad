@@ -673,19 +673,29 @@ const (
 
 // EvalModelSummary is generated from the OpenAPI schema.
 type EvalModelSummary struct {
-	Model             string                      `json:"model"`
-	Overall           float64                     `json:"overall"`
-	CILow             float64                     `json:"ci_low"`
-	CIHigh            float64                     `json:"ci_high"`
-	PassAtK           map[string]float64          `json:"pass_at_k"`
-	VsBaseline        *EvalModelSummaryVsBaseline `json:"vs_baseline"`
-	Tasks             int                         `json:"tasks"`
-	Errors            int                         `json:"errors"`
-	TokensPerTask     float64                     `json:"tokens_per_task"`
-	CostPer1kTasksUSD *float64                    `json:"cost_per_1k_tasks_usd"`
+	// Model The model this summary is for.
+	Model string `json:"model"`
+	// Overall Mean task score (each task's score averages its samples).
+	Overall float64 `json:"overall"`
+	// CILow Lower bound of the bootstrap 95% confidence interval on `overall`.
+	CILow float64 `json:"ci_low"`
+	// CIHigh Upper bound of the bootstrap 95% confidence interval on `overall`.
+	CIHigh float64 `json:"ci_high"`
+	// PassAtK Unbiased pass@k per k (`pass@1`, ...): the chance that one of k samples scores at least `pass_threshold`.
+	PassAtK map[string]float64 `json:"pass_at_k"`
+	// VsBaseline The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval; null for the baseline itself or without one.
+	VsBaseline *EvalModelSummaryVsBaseline `json:"vs_baseline"`
+	// Tasks Tasks this model answered.
+	Tasks int `json:"tasks"`
+	// Errors Model or judge calls that failed.
+	Errors int `json:"errors"`
+	// TokensPerTask Mean tokens per task.
+	TokensPerTask float64 `json:"tokens_per_task"`
+	// CostPer1kTasksUSD Cost per 1,000 tasks in USD; null when the model has no price.
+	CostPer1kTasksUSD *float64 `json:"cost_per_1k_tasks_usd"`
 }
 
-// EvalModelSummaryVsBaseline is generated from the OpenAPI schema.
+// EvalModelSummaryVsBaseline The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval; null for the baseline itself or without one.
 type EvalModelSummaryVsBaseline struct {
 	Delta  float64 `json:"delta"`
 	CILow  float64 `json:"ci_low"`

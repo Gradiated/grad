@@ -375,19 +375,29 @@ export type EvalMode = "eval" | "score";
 export const EvalModeValues = ["eval", "score"] as const;
 
 export interface EvalModelSummary {
+  /** The model this summary is for. */
   model: string;
+  /** Mean task score (each task's score averages its samples). */
   overall: number;
+  /** Lower bound of the bootstrap 95% confidence interval on `overall`. */
   ciLow: number;
+  /** Upper bound of the bootstrap 95% confidence interval on `overall`. */
   ciHigh: number;
+  /** Unbiased pass@k per k (`pass@1`, ...): the chance that one of k samples scores at least `pass_threshold`. */
   passAtK: Record<string, number>;
+  /** The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval; null for the baseline itself or without one. */
   vsBaseline: {
     delta: number;
     ciLow: number;
     ciHigh: number;
   } | null;
+  /** Tasks this model answered. */
   tasks: number;
+  /** Model or judge calls that failed. */
   errors: number;
+  /** Mean tokens per task. */
   tokensPerTask: number;
+  /** Cost per 1,000 tasks in USD; null when the model has no price. */
   costPer1kTasksUsd: number | null;
 }
 

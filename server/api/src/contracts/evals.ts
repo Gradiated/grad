@@ -157,22 +157,52 @@ export type PlanEvalResponse = z.infer<typeof PlanEvalResponseSchema>;
 
 export const EvalModelSummarySchema = z
   .object({
-    model: z.string(),
-    overall: z.number(),
-    ci_low: z.number(),
-    ci_high: z.number(),
-    pass_at_k: z.record(z.string(), z.number()),
+    model: z
+      .string()
+      .openapi({ description: "The model this summary is for." }),
+    overall: z.number().openapi({
+      description: "Mean task score (each task's score averages its samples).",
+    }),
+    ci_low: z.number().openapi({
+      description:
+        "Lower bound of the bootstrap 95% confidence interval on `overall`.",
+    }),
+    ci_high: z.number().openapi({
+      description:
+        "Upper bound of the bootstrap 95% confidence interval on `overall`.",
+    }),
+    pass_at_k: z.record(z.string(), z.number()).openapi({
+      description:
+        "Unbiased pass@k per k (`pass@1`, ...): the chance that one of k samples scores at least `pass_threshold`.",
+    }),
     vs_baseline: z
       .object({
         delta: z.number(),
         ci_low: z.number(),
         ci_high: z.number(),
       })
-      .nullable(),
-    tasks: z.number().int().min(0),
-    errors: z.number().int().min(0),
-    tokens_per_task: z.number(),
-    cost_per_1k_tasks_usd: z.number().nullable(),
+      .nullable()
+      .openapi({
+        description:
+          "The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval; null for the baseline itself or without one.",
+      }),
+    tasks: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Tasks this model answered." }),
+    errors: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Model or judge calls that failed." }),
+    tokens_per_task: z
+      .number()
+      .openapi({ description: "Mean tokens per task." }),
+    cost_per_1k_tasks_usd: z.number().nullable().openapi({
+      description:
+        "Cost per 1,000 tasks in USD; null when the model has no price.",
+    }),
   })
   .openapi("EvalModelSummary");
 

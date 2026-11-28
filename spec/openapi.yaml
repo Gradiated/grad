@@ -734,16 +734,21 @@ components:
       properties:
         model:
           type: string
+          description: The model this summary is for.
         overall:
           type: number
+          description: Mean task score (each task's score averages its samples).
         ci_low:
           type: number
+          description: Lower bound of the bootstrap 95% confidence interval on `overall`.
         ci_high:
           type: number
+          description: Upper bound of the bootstrap 95% confidence interval on `overall`.
         pass_at_k:
           type: object
           additionalProperties:
             type: number
+          description: "Unbiased pass@k per k (`pass@1`, ...): the chance that one of k samples scores at least `pass_threshold`."
         vs_baseline:
           type:
             - object
@@ -759,18 +764,24 @@ components:
             - delta
             - ci_low
             - ci_high
+          description: The mean paired difference from the baseline over the tasks both answered, with a bootstrap 95% interval;
+            null for the baseline itself or without one.
         tasks:
           type: integer
           minimum: 0
+          description: Tasks this model answered.
         errors:
           type: integer
           minimum: 0
+          description: Model or judge calls that failed.
         tokens_per_task:
           type: number
+          description: Mean tokens per task.
         cost_per_1k_tasks_usd:
           type:
             - number
             - "null"
+          description: Cost per 1,000 tasks in USD; null when the model has no price.
       required:
         - model
         - overall
