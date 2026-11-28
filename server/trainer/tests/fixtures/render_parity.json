@@ -1,0 +1,798 @@
+{
+ "render": [
+  {
+   "name": "a plain answer gets an empty think block",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "4"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n4<|im_end|>\n",
+   "trained_text": "4<|im_end|>"
+  },
+  {
+   "name": "a system prompt and two turns: earlier reasoning is dropped",
+   "messages": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    },
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>add</think>4"
+    },
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>\nadd again\n</think>\n\n6"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n4<|im_end|>\n<|im_start|>user\nAnd 3+3?<|im_end|>\n<|im_start|>assistant\n<think>\nadd again\n</think>\n\n6<|im_end|>\n",
+   "trained_text": "<think>\nadd again\n</think>\n\n6<|im_end|>"
+  },
+  {
+   "name": "all_assistant with preserve_thinking keeps and trains both",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>add</think>4"
+    },
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>more</think>6"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "all_assistant",
+    "thinking": "auto",
+    "preserve_thinking": true
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\nadd\n</think>\n\n4<|im_end|>\n<|im_start|>user\nAnd 3+3?<|im_end|>\n<|im_start|>assistant\n<think>\nmore\n</think>\n\n6<|im_end|>\n",
+   "trained_text": "<think>\nadd\n</think>\n\n4<|im_end|><think>\nmore\n</think>\n\n6<|im_end|>"
+  },
+  {
+   "name": "reasoning_content is reasoning",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "4",
+     "reasoning_content": "2 and 2"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "on",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\n2 and 2\n</think>\n\n4<|im_end|>\n",
+   "trained_text": "<think>\n2 and 2\n</think>\n\n4<|im_end|>"
+  },
+  {
+   "name": "a bare </think> is reasoning",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "adding\n</think>\n\n4"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "on",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\nadding\n</think>\n\n4<|im_end|>\n",
+   "trained_text": "<think>\nadding\n</think>\n\n4<|im_end|>"
+  },
+  {
+   "name": "an empty think block is no reasoning",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>\n\n</think>\n\n4"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "off",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n4<|im_end|>\n",
+   "trained_text": "4<|im_end|>"
+  },
+  {
+   "name": "an empty think block fails thinking=on",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think></think>4"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "on",
+    "preserve_thinking": false
+   },
+   "error": true
+  },
+  {
+   "name": "reasoning fails thinking=off",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "4",
+     "reasoning_content": "sum"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "off",
+    "preserve_thinking": false
+   },
+   "error": true
+  },
+  {
+   "name": "an untrained turn's reasoning is no conflict",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>x</think>4",
+     "train": false
+    },
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    },
+    {
+     "role": "assistant",
+     "content": "6"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "off",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n4<|im_end|>\n<|im_start|>user\nAnd 3+3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n6<|im_end|>\n",
+   "trained_text": "6<|im_end|>"
+  },
+  {
+   "name": "train on a user turn is an error",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?",
+     "train": true
+    },
+    {
+     "role": "assistant",
+     "content": "4"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "error": true
+  },
+  {
+   "name": "train=false on the last answer, train=true on an earlier one",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "4",
+     "train": true
+    },
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    },
+    {
+     "role": "assistant",
+     "content": "6",
+     "train": false
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n4<|im_end|>\n<|im_start|>user\nAnd 3+3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n6<|im_end|>\n",
+   "trained_text": "4<|im_end|>"
+  },
+  {
+   "name": "a tool call, its result and the answer after it keep their reasoning",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>call add</think>",
+     "tool_calls": [
+      {
+       "id": "c1",
+       "type": "function",
+       "function": {
+        "name": "add",
+        "arguments": {
+         "a": 2,
+         "b": 2
+        }
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "c1",
+     "content": "4"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "c1",
+     "content": "also 4"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>got it</think>It is 4."
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\ncall add\n</think>\n\n<tool_call>\n{\"name\": \"add\", \"arguments\": {\"a\": 2, \"b\": 2}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n4\n</tool_response>\n<tool_response>\nalso 4\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\ngot it\n</think>\n\nIt is 4.<|im_end|>\n",
+   "trained_text": "<think>\ngot it\n</think>\n\nIt is 4.<|im_end|>"
+  },
+  {
+   "name": "tools go in the system prompt",
+   "messages": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    },
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "c1",
+       "type": "function",
+       "function": {
+        "name": "add",
+        "arguments": {
+         "a": 2,
+         "b": 2
+        }
+       }
+      },
+      {
+       "name": "noop",
+       "arguments": "{}"
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "c1",
+     "content": "4"
+    },
+    {
+     "role": "assistant",
+     "content": "4"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "add",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    }
+   ],
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>system\nBe brief.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"add\", \"parameters\": {\"type\": \"object\"}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<tool_call>\n{\"name\": \"add\", \"arguments\": {\"a\": 2, \"b\": 2}}\n</tool_call>\n<tool_call>\n{\"name\": \"noop\", \"arguments\": {}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n4\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n4<|im_end|>\n",
+   "trained_text": "4<|im_end|>"
+  },
+  {
+   "name": "tools without a system prompt",
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "4"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "add",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    }
+   ],
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>system\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"add\", \"parameters\": {\"type\": \"object\"}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n4<|im_end|>\n",
+   "trained_text": "4<|im_end|>"
+  },
+  {
+   "name": "content parts and a trailing user turn",
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "hi "
+      },
+      {
+       "type": "text",
+       "text": "there"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "hello"
+    },
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nhi there<|im_end|>\n<|im_start|>assistant\nhello<|im_end|>\n<|im_start|>user\nAnd 3+3?<|im_end|>\n",
+   "trained_text": "hello<|im_end|>"
+  },
+  {
+   "name": "unicode",
+   "messages": [
+    {
+     "role": "user",
+     "content": "Grüße, 東京?"
+    },
+    {
+     "role": "assistant",
+     "content": "<think>ü</think>Tōkyō"
+    }
+   ],
+   "tools": null,
+   "options": {
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nGrüße, 東京?<|im_end|>\n<|im_start|>assistant\n<think>\nü\n</think>\n\nTōkyō<|im_end|>\n",
+   "trained_text": "<think>\nü\n</think>\n\nTōkyō<|im_end|>"
+  }
+ ],
+ "prompts": [
+  {
+   "name": "chat messages",
+   "record": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 2+2?"
+     },
+     {
+      "role": "assistant",
+      "content": "4"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    }
+   ],
+   "key": "prompt:aea8acaaea9433344ab6359a"
+  },
+  {
+   "name": "a trailing user turn is part of the prompt",
+   "record": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 2+2?"
+     },
+     {
+      "role": "assistant",
+      "content": "4"
+     },
+     {
+      "role": "user",
+      "content": "And 3+3?"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "4"
+    },
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    }
+   ],
+   "key": "prompt:0ddaabe2e0a2014fe32fc41a"
+  },
+  {
+   "name": "several trailing assistant turns",
+   "record": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 2+2?"
+     },
+     {
+      "role": "assistant",
+      "content": "4"
+     },
+     {
+      "role": "assistant",
+      "content": "Anything else?"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    }
+   ],
+   "key": "prompt:aea8acaaea9433344ab6359a"
+  },
+  {
+   "name": "a tool-call trajectory",
+   "record": {
+    "schema": "grad.trajectory/1",
+    "input": {
+     "messages": [
+      {
+       "role": "system",
+       "content": "Be brief."
+      },
+      {
+       "role": "user",
+       "content": "What is 2+2?"
+      }
+     ]
+    },
+    "output": {
+     "turns": [
+      {
+       "role": "assistant",
+       "content": "",
+       "tool_calls": [
+        {
+         "id": "c1",
+         "type": "function",
+         "function": {
+          "name": "add",
+          "arguments": {
+           "a": 2,
+           "b": 2
+          }
+         }
+        }
+       ]
+      },
+      {
+       "role": "tool",
+       "tool_call_id": "c1",
+       "content": "4"
+      },
+      {
+       "role": "assistant",
+       "content": "4"
+      }
+     ]
+    }
+   },
+   "prompt": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    },
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "c1",
+       "type": "function",
+       "function": {
+        "name": "add",
+        "arguments": {
+         "a": 2,
+         "b": 2
+        }
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "c1",
+     "content": "4"
+    }
+   ],
+   "key": "prompt:620f89c0f8f7f860d895a1ec"
+  },
+  {
+   "name": "messages win over input.messages",
+   "record": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "And 3+3?"
+     },
+     {
+      "role": "assistant",
+      "content": "6"
+     }
+    ],
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "What is 2+2?"
+      }
+     ]
+    },
+    "output": {
+     "turns": [
+      {
+       "role": "assistant",
+       "content": "4"
+      }
+     ]
+    }
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "And 3+3?"
+    }
+   ],
+   "key": "prompt:d02e38571077d94cffd3dd45"
+  },
+  {
+   "name": "prompt and completion",
+   "record": {
+    "prompt": "What is 2+2?",
+    "completion": "4"
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    }
+   ],
+   "key": "prompt:aea8acaaea9433344ab6359a"
+  },
+  {
+   "name": "prompt as messages",
+   "record": {
+    "prompt": [
+     {
+      "role": "system",
+      "content": "Be brief."
+     },
+     {
+      "role": "user",
+      "content": "What is 2+2?"
+     }
+    ],
+    "completion": [
+     {
+      "role": "assistant",
+      "content": "4"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    },
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    }
+   ],
+   "key": "prompt:7c1c24732803a2668bd3ddc6"
+  },
+  {
+   "name": "a group_id wins",
+   "record": {
+    "group_id": "g1",
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 2+2?"
+     },
+     {
+      "role": "assistant",
+      "content": "4"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "What is 2+2?"
+    }
+   ],
+   "key": "g1"
+  },
+  {
+   "name": "only a system prompt",
+   "record": {
+    "messages": [
+     {
+      "role": "system",
+      "content": "Be brief."
+     },
+     {
+      "role": "assistant",
+      "content": "hi"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    }
+   ],
+   "key": "prompt:2fe59f5282b6e7e3c1dfd804"
+  },
+  {
+   "name": "no prompt",
+   "record": {
+    "messages": [
+     {
+      "role": "assistant",
+      "content": "4"
+     }
+    ]
+   },
+   "prompt": [],
+   "key": "prompt:4f53cda18c2baa0c0354bb5f"
+  },
+  {
+   "name": "unicode",
+   "record": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Grüße, 東京?"
+     },
+     {
+      "role": "assistant",
+      "content": "x"
+     }
+    ]
+   },
+   "prompt": [
+    {
+     "role": "user",
+     "content": "Grüße, 東京?"
+    }
+   ],
+   "key": "prompt:2fa5b5c91e7019edd5dc40d7"
+  }
+ ]
+}

@@ -13,7 +13,7 @@ import {
   promptTokens,
   type RenderOptions,
 } from "./render.js";
-import { recordPromptAndReference } from "./records.js";
+import { promptMessages, recordPromptAndReference } from "./records.js";
 
 /**
  * DistillRecipe planning: teacher checks, the resolved rollout and the token
@@ -154,8 +154,9 @@ export const planDistill = (
   );
   const prompts = (records: readonly DatasetRecord[]) =>
     records
-      .map((r) => promptTokens(r, options))
-      .filter((t): t is number => t !== null);
+      .map(promptMessages)
+      .filter((prompt) => prompt.some((m) => m.role === "user"))
+      .map((prompt) => promptTokens(prompt, options));
   const trainPrompts = prompts(split.train);
   const epochs = recipe.epochs;
 

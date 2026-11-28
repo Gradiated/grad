@@ -1,8 +1,15 @@
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 
-import type { DatasetRecord } from "../src/contracts.js";
-import { splitForRecipe, splitRecords } from "../src/planner.js";
+import type { ChatMessage, DatasetRecord } from "../src/contracts.js";
+import { ApiError } from "../src/errors.js";
+import {
+  routerGroupKey,
+  splitForRecipe,
+  splitRecords,
+} from "../src/planner.js";
+import { promptMessages } from "../src/records.js";
+import { renderMessages, type RenderOptions } from "../src/render.js";
 import {
   extendIndex,
   finishIndex,
@@ -94,6 +101,49 @@ describe("trainer parity", () => {
           expect(pages).toEqual(expected);
         }
       }
+    });
+  });
+
+  describe("renders and groups prompts like grad_trainer.templates and recipes/data.py", () => {
+    const { render, prompts } = fixture<{
+      render: Array<{
+        name: string;
+        messages: ChatMessage[];
+        tools: Array<Record<string, unknown>> | null;
+        options: Omit<RenderOptions, "templateRevision">;
+        text?: string;
+        trained_text?: string;
+        error?: true;
+      }>;
+      prompts: Array<{
+        name: string;
+        record: DatasetRecord;
+        prompt: ChatMessage[];
+        key: string;
+      }>;
+    }>("render_parity.json");
+
+    it.each(render)("$name", (c) => {
+      const run = () =>
+        renderMessages(
+          "r",
+          c.messages,
+          { ...c.options, templateRevision: "qwen3@3" },
+          c.tools ?? undefined,
+        );
+      if (c.error) {
+        expect(run).toThrow(ApiError);
+        return;
+      }
+      const { spans } = run();
+      expect(spans.map((s) => s.text).join("")).toBe(c.text);
+      const trained = spans.filter((s) => s.trained);
+      expect(trained.map((s) => s.text).join("")).toBe(c.trained_text);
+    });
+
+    it.each(prompts)("prompt group: $name", (c) => {
+      expect(promptMessages(c.record)).toEqual(c.prompt);
+      expect(routerGroupKey(c.record)).toBe(c.key);
     });
   });
 });

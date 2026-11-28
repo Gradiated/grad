@@ -25,7 +25,7 @@ import {
 import { resolveRecipeParams } from "./recipe-params.js";
 import {
   assessRecipeUsability,
-  recordPromptAndResponse,
+  promptMessages,
   recordShapeHelp,
   preferenceItems,
   routerObservations,
@@ -169,12 +169,13 @@ const pythonJson = (value: unknown): string => {
  * The router's prompt group, as recipes/router.py prompt_key: the record's
  * group_id, else a hash of its prompt messages.
  */
-const routerGroupKey = (record: DatasetRecord): string => {
+export const routerGroupKey = (record: DatasetRecord): string => {
   if (record.group_id !== undefined && record.group_id !== null) {
     return record.group_id;
   }
-  const prompt = recordPromptAndResponse(record)?.prompt ?? [];
-  const digest = createHash("sha256").update(pythonJson(prompt)).digest("hex");
+  const digest = createHash("sha256")
+    .update(pythonJson(promptMessages(record)))
+    .digest("hex");
 
   return `prompt:${digest.slice(0, 24)}`;
 };
@@ -212,8 +213,11 @@ export const splitForRecipe = (
   return { train: back(train), eval: back(evalSet) };
 };
 
-/** Router training items: one per scored prompt group, metered on its prompt tokens only. */
-/** Each router prompt group's prompt tokens (uncapped). */
+/**
+ * Each router prompt group's prompt tokens (uncapped): one training item per
+ * scored group with a prompt, metered on its prompt only (recipes/router.py
+ * collect_groups).
+ */
 const routerGroups = (
   records: readonly DatasetRecord[],
   recipe: PlanRunRequest["recipe"],
@@ -230,8 +234,10 @@ const routerGroups = (
         rubric: typeof recipe.rubric === "string" ? recipe.rubric : undefined,
         candidates: recipe.models?.map((m) => m.trim().toLowerCase()),
       }).models.length > 0;
-    const count = scored ? promptTokens(record, options) : null;
-    if (count !== null) tokens.set(key, count);
+    const prompt = promptMessages(record);
+    if (scored && prompt.length > 0) {
+      tokens.set(key, promptTokens(prompt, options));
+    }
   }
 
   return [...tokens.values()];

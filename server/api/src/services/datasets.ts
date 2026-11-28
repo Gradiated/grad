@@ -308,12 +308,17 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
       const messages = recordConversation(record);
       if (messages.length === 0) continue;
       examples.push(
-        renderMessages(record.id ?? `rec_${position}`, messages, {
-          templateRevision: model.template_revision,
-          train_on: input.train_on,
-          thinking: input.thinking,
-          preserve_thinking: input.preserve_thinking,
-        }),
+        renderMessages(
+          record.id ?? `rec_${position}`,
+          messages,
+          {
+            templateRevision: model.template_revision,
+            train_on: input.train_on,
+            thinking: input.thinking,
+            preserve_thinking: input.preserve_thinking,
+          },
+          record.tools,
+        ),
       );
       if (examples.length === input.limit) break;
     }

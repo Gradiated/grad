@@ -125,7 +125,7 @@ describe("renderMessages", () => {
   it("trains only the last assistant turn and strips earlier thinking", () => {
     const r = renderMessages("r", messages, opts);
     expect(r.spans.filter((s) => s.trained)).toHaveLength(1);
-    expect(r.spans[3]?.text).not.toContain("<think>");
+    expect(r.spans.map((s) => s.text).join("")).not.toContain("old");
     expect(r.template_revision).toBe("qwen3@3");
   });
 
@@ -135,18 +135,30 @@ describe("renderMessages", () => {
       train_on: "all_assistant",
       preserve_thinking: true,
     });
-    expect(all.spans.filter((s) => s.trained)).toHaveLength(2);
-    expect(all.spans[3]?.text).toContain("<think>");
+    const trained = all.spans.filter((s) => s.trained);
+    expect(trained.map((s) => s.text)).toEqual([
+      "<think>\nold\n</think>\n\nfirst<|im_end|>",
+      "<think>\nnew\n</think>\n\nsecond<|im_end|>",
+    ]);
     const override = renderMessages(
       "r",
       [
-        { role: "user", content: "x", train: true },
+        { role: "user", content: "x" },
         { role: "assistant", content: "y", train: false },
       ],
       opts,
     );
-    expect(override.spans[1]?.trained).toBe(true);
-    expect(override.spans[3]?.trained).toBe(false);
+    expect(override.trained_tokens).toBe(0);
+    expect(() =>
+      renderMessages(
+        "r",
+        [
+          { role: "user", content: "x", train: true },
+          { role: "assistant", content: "y" },
+        ],
+        opts,
+      ),
+    ).toThrow(/only assistant turns can be trained/);
     expect(() =>
       renderMessages("r", messages, { ...opts, thinking: "off" }),
     ).toThrow(ApiError);
@@ -398,10 +410,11 @@ describe("planRun", () => {
       thinking: "auto",
       preserve_thinking: false,
     });
-    // user: 3 + 1 + 2; assistant: 3 + 4 (empty think) + 1 + 2.
+    // user: 3 + 1 + 2; assistant: 3 + 4 (empty think) + 1 + 2, of which the
+    // answer and its <|im_end|> train (not the newline after it).
     expect(rendered.total_tokens).toBe(16);
-    expect(rendered.trained_tokens).toBe(3);
-    expect(rendered.spans[2]?.text).toContain("<think>\n\n</think>");
+    expect(rendered.trained_tokens).toBe(2);
+    expect(rendered.spans[0]?.text).toContain("<think>\n\n</think>");
     const long = plan({ kind: "sft" }, [one("y".repeat(80_000))], {
       split: { eval_fraction: 0 },
     });

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 
 from helpers import TorchCase
 
 from grad_trainer.errors import RecipeConfigError, RecipeDataError
+from grad_trainer.recipes.data import prompt_key, prompt_messages
 from grad_trainer.templates import message_text, render_chat, tokenize_rendered, tokenize_rendered_batch
 
 MULTI_TURN = [
@@ -159,6 +162,25 @@ class TemplateParityTests(TorchCase):
         for one, batched in zip([tokenize_rendered(c, self.tok, max_len=40) for c in chats], tokenize_rendered_batch(chats, self.tok, max_len=40)):
             self.assertEqual((one.input_ids.tolist(), one.trained.tolist(), one.truncated), (batched.input_ids.tolist(), batched.trained.tolist(), batched.truncated))
         self.assertEqual(tokenize_rendered_batch([], self.tok), [])
+
+
+class RenderParityFixtureTests(unittest.TestCase):
+    """render_parity.json (fixtures/render_parity.py): server/api renderMessages and the planner's
+    prompt groups replay the same file (server/api/test/trainer-parity.test.ts)."""
+
+    def test_matches_the_fixture(self) -> None:
+        fixture = json.loads((Path(__file__).parent / "fixtures" / "render_parity.json").read_text())
+        for case in fixture["render"]:
+            with self.subTest(case["name"]):
+                try:
+                    r = render_chat(case["messages"], tools=case["tools"], **case["options"])
+                    self.assertEqual((r.text, r.trained_text), (case["text"], case["trained_text"]))
+                except RecipeDataError:
+                    self.assertTrue(case.get("error"))
+        for case in fixture["prompts"]:
+            with self.subTest(case["name"]):
+                self.assertEqual(prompt_messages(case["record"]), case["prompt"])
+                self.assertEqual(prompt_key(case["record"]), case["key"])
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import {
 } from "./contracts.js";
 import { DEFAULT_CHARS_PER_TOKEN } from "./catalog.js";
 import { invalid } from "./errors.js";
-import { recordConversation, recordPromptAndResponse } from "./records.js";
+import { recordConversation } from "./records.js";
 
 /**
  * Chat-template rendering and token estimates: what a record looks like to
@@ -39,30 +39,101 @@ export interface RenderOptions {
   charsPerToken?: number;
 }
 
-/** ChatML framing, exact for the Qwen3 tokenizer: `<|im_start|>`, role, newline. */
+/** `<|im_start|>`, the role and its newline. */
 const HEADER_TOKENS = 3;
-/** `<|im_end|>` and the newline after it. */
-const FOOTER_TOKENS = 2;
-/** `<think>\n\n</think>\n\n`, rendered (untrained) before a final answer without reasoning. */
-const EMPTY_THINK = "<think>\n\n</think>\n\n";
-const EMPTY_THINK_TOKENS = 4;
 /** The generation header the trainer appends to router/classifier prompts. */
 const GENERATION_HEADER_TOKENS = 3;
 
-const stripThinking = (text: string): string =>
-  text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+/** OpenAI-style `tool_calls` and tools as the template's `tojson` writes them (Python's json.dumps). */
+const toJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(toJson).join(", ")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
 
-const hasThinkingBlock = (text: string): boolean =>
-  /<think>[\s\S]*?<\/think>/.test(text);
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}: ${toJson(v)}`).join(", ")}}`;
+  }
+
+  return JSON.stringify(value) ?? "null";
+};
+
+const stripNewlines = (text: string, end: "start" | "end" | "both"): string => {
+  let out = text;
+  if (end !== "end") out = out.replace(/^\n+/, "");
+  if (end !== "start") out = out.replace(/\n+$/, "");
+
+  return out;
+};
+
+/** (reasoning, answer): `reasoning_content`, else what comes before a `</think>`. */
+const splitReasoning = (message: ChatMessage): [string, string] => {
+  const content = messageText(message);
+  const reasoning = (message as { reasoning_content?: unknown })
+    .reasoning_content;
+  if (typeof reasoning === "string") return [reasoning, content];
+  if (!content.includes("</think>")) return ["", content];
+
+  const before = stripNewlines(content.split("</think>")[0] as string, "end");
+
+  return [
+    stripNewlines(before.split("<think>").at(-1) as string, "start"),
+    stripNewlines(content.split("</think>").at(-1) as string, "start"),
+  ];
+};
+
+const toolCallsText = (
+  recordId: string,
+  calls: ChatMessage["tool_calls"],
+  content: string,
+): string =>
+  (calls ?? [])
+    .map((call, i) => {
+      if (typeof call !== "object" || call === null || Array.isArray(call)) {
+        throw invalid(
+          "render_conflict",
+          `Record '${recordId}': tool_calls entries must be objects.`,
+        );
+      }
+      const fn = (call.function ?? call) as Record<string, unknown>;
+      const args = fn.arguments ?? {};
+      const name = String(fn.name ?? "");
+      const text = `<tool_call>\n{"name": "${name}", "arguments": ${typeof args === "string" ? args : toJson(args)}}\n</tool_call>`;
+
+      return (i === 0 && content) || i > 0 ? `\n${text}` : text;
+    })
+    .join("");
+
+/** The last user turn that isn't a tool response (the template's `last_query_index`). */
+const lastQueryIndex = (messages: readonly ChatMessage[]): number => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i] as ChatMessage;
+    const text = m.content;
+    if (
+      m.role === "user" &&
+      typeof text === "string" &&
+      !(text.startsWith("<tool_response>") && text.endsWith("</tool_response>"))
+    ) {
+      return i;
+    }
+  }
+
+  return messages.length - 1;
+};
 
 /**
- * ChatML preview with loss masks. Token counts are estimates; the trainer
- * renders with the pinned tokenizer and chat template.
+ * The trainer's chat rendering (templates.py `render_chat`, the Qwen3
+ * template): the same text and the same trained spans, so the preview shows
+ * what trains. Thinking follows it too: reasoning is `reasoning_content` or
+ * what comes before a `</think>`; the turns after the last user query keep it
+ * (the final answer gets an empty think block without), earlier turns lose
+ * it unless `preserve_thinking`. Token counts are estimates (framing exact,
+ * text by characters); the trainer tokenizes for real.
+ * server/api/test/trainer-parity.test.ts holds it to the trainer.
  */
 export const renderMessages = (
   recordId: string,
   messages: readonly ChatMessage[],
   options: RenderOptions,
+  tools?: ReadonlyArray<Record<string, unknown>>,
 ): {
   record_id: string;
   template_revision: string;
@@ -71,61 +142,111 @@ export const renderMessages = (
   trained_fraction: number;
   spans: Array<{ text: string; trained: boolean; tokens: number }>;
 } => {
-  let lastAssistantIndex = -1;
-  messages.forEach((m, i) => {
-    if (m.role === "assistant") lastAssistantIndex = i;
-  });
-
   const spans: Array<{ text: string; trained: boolean; tokens: number }> = [];
-  let totalTokens = 0;
-  let trainedTokens = 0;
-
-  messages.forEach((message, i) => {
-    const rawContent = messageText(message);
-    const isAssistant = message.role === "assistant";
-    const isLastAssistant = i === lastAssistantIndex;
-
-    const trained =
-      message.train ??
-      (isAssistant &&
-        (options.train_on === "all_assistant" || isLastAssistant));
-
-    if (trained && isAssistant) {
-      const hasThink = hasThinkingBlock(rawContent);
-      if (options.thinking === "off" && hasThink) {
-        throw invalid(
-          "render_conflict",
-          `Record '${recordId}' contains a <think> block but thinking='off'.`,
-        );
-      }
-      if (options.thinking === "on" && !hasThink) {
-        throw invalid(
-          "render_conflict",
-          `Record '${recordId}' has no <think> block but thinking='on'.`,
-        );
-      }
+  const emit = (text: string, tokens: number, trained = false) => {
+    if (!text) return;
+    const last = spans.at(-1);
+    if (last && last.trained === trained) {
+      last.text += text;
+      last.tokens += tokens;
+    } else {
+      spans.push({ text, trained, tokens });
     }
+  };
+  const estimate = (text: string) =>
+    estimateTextTokens(text, options.charsPerToken);
+  const conflict = (detail: string) =>
+    invalid("render_conflict", `Record '${recordId}' ${detail}`);
 
-    const content =
-      isAssistant && !isLastAssistant && !options.preserve_thinking
-        ? stripThinking(rawContent)
-        : rawContent;
-    // The trainer renders the final answer behind an empty think block when it has none.
-    const emptyThink =
-      isLastAssistant &&
-      i === messages.length - 1 &&
-      !hasThinkingBlock(content);
-    const header = `<|im_start|>${message.role}\n${emptyThink ? EMPTY_THINK : ""}`;
-    const body = `${content}<|im_end|>\n`;
-    const headerTokens = HEADER_TOKENS + (emptyThink ? EMPTY_THINK_TOKENS : 0);
-    const bodyTokens =
-      estimateTextTokens(content, options.charsPerToken) + FOOTER_TOKENS;
+  const first = messages[0];
+  if (tools && tools.length > 0) {
+    const intro = first?.role === "system" ? `${messageText(first)}\n\n` : "";
+    const body =
+      `${intro}# Tools\n\nYou may call one or more functions to assist with the user query.\n\n` +
+      "You are provided with function signatures within <tools></tools> XML tags:\n<tools>" +
+      tools.map((tool) => `\n${toJson(tool)}`).join("") +
+      "\n</tools>\n\nFor each function call, return a json object with function name and " +
+      "arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n" +
+      '{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>';
+    emit(
+      `<|im_start|>system\n${body}<|im_end|>\n`,
+      HEADER_TOKENS + estimate(body) + 2,
+    );
+  } else if (first?.role === "system") {
+    const body = messageText(first);
+    emit(
+      `<|im_start|>system\n${body}<|im_end|>\n`,
+      HEADER_TOKENS + estimate(body) + 2,
+    );
+  }
 
-    spans.push({ text: header, trained: false, tokens: headerTokens });
-    spans.push({ text: body, trained, tokens: bodyTokens });
-    totalTokens += headerTokens + bodyTokens;
-    if (trained) trainedTokens += bodyTokens;
+  const lastQuery = lastQueryIndex(messages);
+  let lastAssistant = -1;
+  messages.forEach((m, i) => {
+    if (m.role === "assistant") lastAssistant = i;
   });
+  const n = messages.length;
+  messages.forEach((message, i) => {
+    const { role } = message;
+    if (message.train === true && role !== "assistant") {
+      throw invalid(
+        "render_conflict",
+        `Record '${recordId}': only assistant turns can be trained (message ${i} is '${role}').`,
+      );
+    }
+    if (role === "user" || (role === "system" && i !== 0)) {
+      const body = messageText(message);
+      emit(
+        `<|im_start|>${role}\n${body}<|im_end|>\n`,
+        HEADER_TOKENS + estimate(body) + 2,
+      );
+    } else if (role === "tool") {
+      const body = messageText(message);
+      if (i === 0 || messages[i - 1]?.role !== "tool")
+        emit("<|im_start|>user", 2);
+      emit(`\n<tool_response>\n${body}\n</tool_response>`, estimate(body) + 5);
+      if (i === n - 1 || messages[i + 1]?.role !== "tool")
+        emit("<|im_end|>\n", 2);
+    } else if (role === "assistant") {
+      const trained =
+        message.train ??
+        (options.train_on === "all_assistant" || i === lastAssistant);
+      const [reasoning, content] = splitReasoning(message);
+      const hasReasoning = reasoning.trim().length > 0;
+      if (trained && options.thinking === "off" && hasReasoning) {
+        throw conflict(`message ${i} contains reasoning but thinking='off'.`);
+      }
+      if (trained && options.thinking === "on" && !hasReasoning) {
+        throw conflict(
+          `message ${i} has no <think> reasoning but thinking='on'.`,
+        );
+      }
+      emit("<|im_start|>assistant\n", HEADER_TOKENS);
+      const showThink =
+        (i > lastQuery && (i === n - 1 || reasoning.length > 0)) ||
+        (options.preserve_thinking && hasReasoning);
+      let body = content;
+      if (showThink) {
+        const think = stripNewlines(reasoning, "both");
+        emit(
+          `<think>\n${think}\n</think>\n\n`,
+          4 + estimate(think),
+          trained && hasReasoning,
+        );
+        body = stripNewlines(content, "start");
+      }
+      const answer =
+        body + toolCallsText(recordId, message.tool_calls, content);
+      emit(`${answer}<|im_end|>`, estimate(answer) + 1, trained);
+      emit("\n", 1);
+    }
+  });
+
+  const totalTokens = spans.reduce((sum, s) => sum + s.tokens, 0);
+  const trainedTokens = spans.reduce(
+    (sum, s) => sum + (s.trained ? s.tokens : 0),
+    0,
+  );
 
   return {
     record_id: recordId,
@@ -156,6 +277,7 @@ export const estimateRecordTokens = (
       record.id ?? "record",
       conversation,
       options,
+      record.tools,
     );
 
     return { total: rendered.total_tokens, trained: rendered.trained_tokens };
@@ -178,16 +300,10 @@ export const estimateRecordTokens = (
   return { total, trained: Math.max(8, Math.round(total * 0.4)) };
 };
 
-/** Tokens of a record's prompt rendered with the generation header, or null without one. */
+/** Tokens of a prompt rendered with the generation header (the trainer's `encode_prompt`). */
 export const promptTokens = (
-  record: DatasetRecord,
+  prompt: readonly ChatMessage[],
   options: RenderOptions,
-): number | null => {
-  const prompt = recordPromptAndResponse(record)?.prompt ?? [];
-  if (!prompt.some((m) => m.role === "user")) return null;
-
-  return (
-    renderMessages(record.id ?? "record", prompt, options).total_tokens +
-    GENERATION_HEADER_TOKENS
-  );
-};
+): number =>
+  renderMessages("prompt", prompt, { ...options, train_on: "last" })
+    .total_tokens + GENERATION_HEADER_TOKENS;

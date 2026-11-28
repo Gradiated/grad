@@ -149,6 +149,13 @@ const splitAnswer = (
 };
 
 /**
+ * The conversation before its trailing assistant turns: what router,
+ * distill and cartridge runs prompt with (trainer `prompt_messages`).
+ */
+export const promptMessages = (record: DatasetRecord): ChatMessage[] =>
+  splitAnswer(ownConversation(record))[0];
+
+/**
  * The conversation a record trains on (trainer `record_messages`).
  * `expected_output` is the target: it replaces the record's own final answer
  * (a synced correction), or answers a prompt that has none. A record without

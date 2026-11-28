@@ -65,7 +65,7 @@ describe("training targets (shared with the trainer)", () => {
       );
       const trained = rendered.spans.filter((s) => s.trained);
       expect(trained.map((s) => s.text)).toEqual([
-        `${c.conversation.at(-1)?.content as string}<|im_end|>\n`,
+        `${c.conversation.at(-1)?.content as string}<|im_end|>`,
       ]);
       const context = rendered.spans
         .filter((s) => !s.trained)
