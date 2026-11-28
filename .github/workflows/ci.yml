@@ -425,6 +425,10 @@ jobs:
           refuses "in-cluster pools with lease only" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.auth=lease --set api.internalPort=8788 --set secrets.orchestratorKeysJson=x
           refuses "a key under database other than caBundle" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set database.awsAccessKeyId=x
           refuses "both database.caBundle sources" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set database.caBundle.configMap.name=rds-ca --set database.caBundle.pem=x
+          # As a dependency of an umbrella chart, which always passes `global`.
+          umbrella="$RUNNER_TEMP/umbrella" && mkdir -p "$umbrella/charts" && cp -rL "$chart" "$umbrella/charts/grad"
+          printf 'apiVersion: v2\nname: umbrella\nversion: 0.1.0\ndependencies: [{name: grad, version: "%s"}]\n' "$(sed -n 's/^version: //p' "$chart/Chart.yaml")" > "$umbrella/Chart.yaml"
+          helm template u "$umbrella" --set global.imageRegistry=r.example --set grad.storage.s3Bucket=b --set grad.secrets.databaseUrl="$db" > /dev/null
           autoscaling() {  # autoscaling <want> <helm template args...>: a waiting run says a worker is starting only if one can
             local want=$1; shift
             got=$(helm template grad "$chart" --set storage.s3Bucket=a --set secrets.databaseUrl="$db" --set keda.enabled=true --set keda.trigger=metrics-api "$@" | grep -F GRAD_WORKER_AUTOSCALING)

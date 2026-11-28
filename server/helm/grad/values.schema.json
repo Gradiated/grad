@@ -3,6 +3,10 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "global": {
+      "type": "object",
+      "description": "Helm's values shared with every chart of an umbrella release (Helm always passes it to a dependency); grad reads none."
+    },
     "nameOverride": {
       "type": "string"
     },
