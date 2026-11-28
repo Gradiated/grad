@@ -380,7 +380,8 @@ export const createImportService = (
           const blob = await uploads.commit(body.source.upload_id, (sha) =>
             stagingKey(workspaceId, sha),
           );
-          // A file is imported into a dataset once: a retry gets that import.
+          // A file is imported into a dataset once (a retry gets that
+          // import) unless that import failed.
           const imported = () =>
             store.imports.findByUpload(dataset.id, blob.sha256);
           const existing = await imported();

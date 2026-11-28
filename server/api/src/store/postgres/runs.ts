@@ -132,7 +132,7 @@ export const createImportJobRepository = (
     getById: repo.getById,
     findByUpload: (datasetId, sha256) =>
       repo.find(
-        "payload->>'dataset_id' = $1 AND payload->'source'->>'sha256' = $2 AND payload->'source'->>'kind' = 'upload'",
+        "payload->>'dataset_id' = $1 AND payload->'source'->>'sha256' = $2 AND payload->'source'->>'kind' = 'upload' AND status <> 'failed'",
         [datasetId, sha256],
       ),
     list: (workspaceId, page, filter) =>

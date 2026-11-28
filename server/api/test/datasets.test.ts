@@ -710,6 +710,42 @@ describe("datasets, uploads and imports", () => {
     });
   });
 
+  it("imports a file again once its earlier import of it failed", async () => {
+    const file = Buffer.from('{"messages":[]}\n');
+    const ticket = await t.json<{
+      upload_id: string;
+      url: string;
+      headers: Record<string, string>;
+    }>("/v1/uploads", {
+      body: {
+        purpose: "dataset_import",
+        filename: "traces.jsonl",
+        size_bytes: file.byteLength,
+        sha256: sha256Hex(file),
+      },
+    });
+    await t.request(ticket.body.url, {
+      method: "PUT",
+      headers: ticket.body.headers,
+      body: file,
+    });
+    const importIt = () =>
+      t.json<{ id: string; status: string }>("/v1/datasets/traces/imports", {
+        body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
+      });
+    const first = await importIt();
+    const job = (await worker.claim())!;
+    expect(job.id).toBe(first.body.id);
+    await worker.complete(job, { status: "failed", error: "worker bug" });
+
+    const again = await importIt();
+    expect(again.status).toBe(202);
+    expect(again.body.id).not.toBe(first.body.id);
+    expect(again.body.status).toBe("queued");
+    // While that one lives, the file maps to it.
+    expect((await importIt()).body.id).toBe(again.body.id);
+  });
+
   it("scopes imports and uploads to the caller's workspace", async () => {
     const other = await t.mintKey("ws_b", ["admin"]);
     const imp = await t.json<{ id: string }>("/v1/datasets/x/imports", {

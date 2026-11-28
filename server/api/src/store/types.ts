@@ -553,7 +553,7 @@ export interface ImportJobRepository {
   ): Promise<ImportJobRecord>;
   get(workspaceId: string, id: string): Promise<ImportJobRecord | null>;
   getById(id: string): Promise<ImportJobRecord | null>;
-  /** The import of the uploaded file `sha256` into `datasetId`, if any. */
+  /** The import of the uploaded file `sha256` into `datasetId` that has not failed, if any. */
   findByUpload(
     datasetId: string,
     sha256: string,
