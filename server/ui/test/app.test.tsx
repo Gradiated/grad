@@ -267,6 +267,13 @@ describe("runs", () => {
     }
   });
 
+  it("says which scope a key lacks, without a Retry that can't help", async () => {
+    const { container } = await boot(fakeServer(routes({ "GET /v1/datasets": () => problem(403, "forbidden", "This endpoint requires the 'datasets:read' scope.") })), "/datasets");
+    await waitFor(() => expect(container.textContent).toContain("requires the 'datasets:read' scope. Sign in with a key that has it"));
+    expect(byText(container, "button", "Retry")).toBeUndefined();
+    expect(container.textContent).not.toContain("No datasets yet");
+  });
+
   it("focuses the filter with / and clears it with Escape", async () => {
     const { container } = await boot();
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
@@ -313,7 +320,7 @@ describe("runs", () => {
 
   it("retries a failed page load", async () => {
     let fail = true;
-    const server = fakeServer(routes({ "GET /v1/runs": ({ url }: { url: URL }) => (fail && url.searchParams.get("limit") === "50" ? problem(400, "bad_request", "listing failed") : json({ data: [RUN], next_cursor: null })) }));
+    const server = fakeServer(routes({ "GET /v1/runs": ({ url }: { url: URL }) => (fail && url.searchParams.get("limit") === "50" ? problem(503, "unavailable", "listing failed") : json({ data: [RUN], next_cursor: null })) }));
     const { container } = await boot(server);
     await waitFor(() => expect(container.textContent).toContain("listing failed"));
     fail = false;

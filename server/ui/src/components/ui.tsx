@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
-import { errorMessage } from "../lib/api.js";
+import { APIError, errorMessage } from "../lib/api.js";
 import { humanize } from "../lib/format.js";
 import type { PagedList } from "../lib/hooks.js";
 import { Link, navigate } from "../lib/router.js";
@@ -86,13 +86,17 @@ export const Banner = ({ tone = "error", action, children }: { tone?: "error" | 
   </div>
 );
 
-/** An API error with a Retry button; `stale` says the page still shows what it loaded before. */
+/** Whether trying again can help: network errors, 5xx, 408 and 429, not a refusal such as 403 or 404. */
+const retryable = (error: unknown): boolean => !(error instanceof APIError) || error.status >= 500 || error.status === 408 || error.status === 429;
+
+/** An API error, with Retry when retrying can help; `stale` says the page still shows what it loaded before. */
 export const ErrorBanner = ({ error, onRetry, stale }: { error: unknown; onRetry?: () => void; stale?: boolean }) =>
   error ? (
     <Banner
       tone={stale ? "warn" : "error"}
       action={
-        onRetry && (
+        onRetry &&
+        retryable(error) && (
           <button type="button" className="btn sm" onClick={onRetry}>
             <IconRefresh /> Retry
           </button>
@@ -100,6 +104,7 @@ export const ErrorBanner = ({ error, onRetry, stale }: { error: unknown; onRetry
       }
     >
       {stale ? `Couldn't refresh: ${errorMessage(error)}. Showing what was loaded; retrying.` : errorMessage(error)}
+      {error instanceof APIError && error.status === 403 && " Sign in with a key that has it to see this page."}
     </Banner>
   ) : null;
 
