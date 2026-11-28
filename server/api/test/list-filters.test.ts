@@ -46,6 +46,17 @@ describe("list filters: status, q and an import's dataset", () => {
 
     const bad = await t.json("/v1/runs?status=running,nope");
     expect(bad.status).toBe(422);
+
+    // q's exact-id match stays inside the caller's workspace.
+    const other = await t.mintKey("ws_b", ["admin"]);
+    for (const path of [`/v1/runs?q=${a.id}`, `/v1/runs?q=support`]) {
+      const res = await t.json<Named>(path, { token: other });
+      expect([path, res.status, res.body.data]).toEqual([path, 200, []]);
+    }
+    const curve = await t.json(`/v1/runs/${a.id}/metrics?max_points=10`, {
+      token: other,
+    });
+    expect(curve.status).toBe(404);
   });
 
   it("pages a filtered list with the same cursor", async () => {
