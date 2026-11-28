@@ -32,6 +32,16 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   shows an artifact import queued with `--no-wait`. The Homebrew formula installs the bash, zsh and fish
   completions.
 
+- **SDKs: safer downloads and event streams.** An extraction never replaces the working directory or a
+  parent of it: Python's `artifacts.download(ref)` defaulted to `path="."`, so the default `format="peft"`
+  could not work, and with `overwrite=True` it deleted the working tree before failing; Rust and
+  `grad artifacts download --output . --force` did the same. Python's default destination is now
+  `./<name>-<version>` (`.grad.tar.gz` for a bundle). TypeScript and Go check that an extraction directory
+  is empty before downloading, not after; they also check `eval_report.json` against
+  `manifest.eval_report_sha256`, as Python and Rust do, and TypeScript no longer accepts an unlisted
+  bundle file named like an `Object` property (`constructor`). When a proxy answers the run event stream
+  with JSON, TypeScript (which reconnected forever) and Go raise a `not_event_stream` decode error.
+
 - **Run comparison reads.** `GET /v1/runs/{id}/metrics?max_points=N` returns a run's whole curve in one page, thinned
   to at most N points spaced evenly back from the newest (eval points thinned separately, so a sparse eval curve
   survives) and without the steps a resumed attempt replayed. A 100,000-point run answers in about 300 ms.
