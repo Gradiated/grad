@@ -964,32 +964,44 @@ const (
 
 // EvalRun is generated from the OpenAPI schema.
 type EvalRun struct {
-	ID            string             `json:"id"`
-	WorkspaceID   string             `json:"workspace_id"`
-	Name          string             `json:"name"`
-	Status        EvalStatus         `json:"status"`
-	Mode          EvalMode           `json:"mode"`
-	Models        []string           `json:"models"`
-	Baseline      *string            `json:"baseline"`
-	TaskSource    EvalRunTaskSource  `json:"task_source"`
-	Rubric        []EvalRubricItem   `json:"rubric"`
-	Samples       int                `json:"samples"`
-	Temperature   float64            `json:"temperature"`
-	MaxTokens     int                `json:"max_tokens"`
-	PassThreshold float64            `json:"pass_threshold"`
-	JudgeModels   []string           `json:"judge_models"`
-	LocalScorers  []string           `json:"local_scorers"`
-	Progress      EvalRunProgress    `json:"progress"`
-	Summary       []EvalModelSummary `json:"summary"`
-	TotalCostUSD  float64            `json:"total_cost_usd"`
+	// ID Eval id (`eval_` and 24 hex characters).
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspace_id"`
+	Name        string     `json:"name"`
+	Status      EvalStatus `json:"status"`
+	Mode        EvalMode   `json:"mode"`
+	// Models The models evaluated: catalog ids, artifacts (`name@version`) or models the inference endpoint serves.
+	Models []string `json:"models"`
+	// Baseline The model the summary compares the others with (`vs_baseline`); null for none.
+	Baseline   *string           `json:"baseline"`
+	TaskSource EvalRunTaskSource `json:"task_source"`
+	Rubric     []EvalRubricItem  `json:"rubric"`
+	// Samples Answers generated per task and model.
+	Samples int `json:"samples"`
+	// Temperature Sampling temperature of the model calls.
+	Temperature float64 `json:"temperature"`
+	// MaxTokens The most tokens each answer may have.
+	MaxTokens int `json:"max_tokens"`
+	// PassThreshold Score at or above which a task passes.
+	PassThreshold float64 `json:"pass_threshold"`
+	// JudgeModels The judge models the rubric calls.
+	JudgeModels []string `json:"judge_models"`
+	// LocalScorers Code scorers that run in the SDK process; the eval waits in `awaiting_scores` until they post their scores.
+	LocalScorers []string           `json:"local_scorers"`
+	Progress     EvalRunProgress    `json:"progress"`
+	Summary      []EvalModelSummary `json:"summary"`
+	// TotalCostUSD Cost of the model and judge calls so far, in USD.
+	TotalCostUSD float64 `json:"total_cost_usd"`
 	// ScoredDatasetVersion Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
-	ScoredDatasetVersion *int    `json:"scored_dataset_version"`
-	Error                *string `json:"error"`
+	ScoredDatasetVersion *int `json:"scored_dataset_version"`
+	// Error Why the eval failed; null otherwise.
+	Error *string `json:"error"`
 	// WaitingReason While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
 	WaitingReason *EvalRunWaitingReason `json:"waiting_reason"`
 	CreatedAt     string                `json:"created_at"`
 	UpdatedAt     string                `json:"updated_at"`
-	CompletedAt   *string               `json:"completed_at"`
+	// CompletedAt When the eval reached a final status; null until then.
+	CompletedAt *string `json:"completed_at"`
 }
 
 // EvalRunProgress is generated from the OpenAPI schema.
@@ -1698,17 +1710,25 @@ type PlanCostBreakdown struct {
 
 // PlanEvalRequest is generated from the OpenAPI schema.
 type PlanEvalRequest struct {
-	Name           *string  `json:"name,omitempty"`
-	Models         []string `json:"models"`
-	Baseline       *string  `json:"baseline,omitempty"`
-	Dataset        string   `json:"dataset"`
-	DatasetVersion *int     `json:"dataset_version,omitempty"`
+	Name *string `json:"name,omitempty"`
+	// Models The models to evaluate: catalog ids, artifacts (`name@version`) or models your inference endpoint serves.
+	Models []string `json:"models"`
+	// Baseline One of `models`; the summary reports every other model's difference from it.
+	Baseline *string `json:"baseline,omitempty"`
+	// Dataset The dataset whose records are the tasks.
+	Dataset string `json:"dataset"`
+	// DatasetVersion The version to evaluate. Default: the current one, pinned when the eval is created.
+	DatasetVersion *int `json:"dataset_version,omitempty"`
 	// Rubric Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator.
-	Rubric      []EvalRubricItem `json:"rubric,omitempty"`
-	Samples     *int             `json:"samples,omitempty"`
-	Temperature *float64         `json:"temperature,omitempty"`
-	MaxTokens   *int             `json:"max_tokens,omitempty"`
-	Limit       *int             `json:"limit,omitempty"`
+	Rubric []EvalRubricItem `json:"rubric,omitempty"`
+	// Samples Answers per task and model; 3 or more for decisions you will act on.
+	Samples *int `json:"samples,omitempty"`
+	// Temperature Sampling temperature of the model calls.
+	Temperature *float64 `json:"temperature,omitempty"`
+	// MaxTokens The most tokens each answer may have.
+	MaxTokens *int `json:"max_tokens,omitempty"`
+	// Limit Evaluate only the first `limit` tasks.
+	Limit *int `json:"limit,omitempty"`
 	// PassThreshold Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
 	PassThreshold *float64 `json:"pass_threshold,omitempty"`
 }

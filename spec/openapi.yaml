@@ -491,6 +491,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Eval id (`eval_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
@@ -507,10 +508,12 @@ components:
           type: array
           items:
             type: string
+          description: "The models evaluated: catalog ids, artifacts (`name@version`) or models the inference endpoint serves."
         baseline:
           type:
             - string
             - "null"
+          description: The model the summary compares the others with (`vs_baseline`); null for none.
         task_source:
           type: object
           properties:
@@ -537,25 +540,31 @@ components:
         samples:
           type: integer
           minimum: 1
+          description: Answers generated per task and model.
         temperature:
           type: number
           minimum: 0
           maximum: 2
+          description: Sampling temperature of the model calls.
         max_tokens:
           type: integer
           minimum: 1
+          description: The most tokens each answer may have.
         pass_threshold:
           type: number
           minimum: 0
           maximum: 1
+          description: Score at or above which a task passes.
         judge_models:
           type: array
           items:
             type: string
+          description: The judge models the rubric calls.
         local_scorers:
           type: array
           items:
             type: string
+          description: Code scorers that run in the SDK process; the eval waits in `awaiting_scores` until they post their scores.
         progress:
           type: object
           properties:
@@ -579,6 +588,7 @@ components:
         total_cost_usd:
           type: number
           minimum: 0
+          description: Cost of the model and judge calls so far, in USD.
         scored_dataset_version:
           type:
             - integer
@@ -590,6 +600,7 @@ components:
           type:
             - string
             - "null"
+          description: Why the eval failed; null otherwise.
         waiting_reason:
           type:
             - string
@@ -613,6 +624,7 @@ components:
             - string
             - "null"
           format: date-time
+          description: When the eval reached a final status; null until then.
       required:
         - id
         - workspace_id
@@ -4997,18 +5009,22 @@ components:
             maxLength: 200
           minItems: 1
           maxItems: 16
+          description: "The models to evaluate: catalog ids, artifacts (`name@version`) or models your inference endpoint serves."
         baseline:
           type: string
           minLength: 1
           maxLength: 200
+          description: One of `models`; the summary reports every other model's difference from it.
         dataset:
           type: string
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: The dataset whose records are the tasks.
         dataset_version:
           type: integer
           minimum: 1
+          description: "The version to evaluate. Default: the current one, pinned when the eval is created."
         rubric:
           type: array
           items:
@@ -5021,20 +5037,24 @@ components:
           minimum: 1
           maximum: 32
           default: 1
+          description: Answers per task and model; 3 or more for decisions you will act on.
         temperature:
           type: number
           minimum: 0
           maximum: 2
           default: 0.7
+          description: Sampling temperature of the model calls.
         max_tokens:
           type: integer
           minimum: 1
           maximum: 32768
           default: 1024
+          description: The most tokens each answer may have.
         limit:
           type: integer
           minimum: 1
           maximum: 100000
+          description: Evaluate only the first `limit` tasks.
         pass_threshold:
           type:
             - number

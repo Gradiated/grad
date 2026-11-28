@@ -504,12 +504,15 @@ export interface EvalRubricItem {
 }
 
 export interface EvalRun {
+  /** Eval id (`eval_` and 24 hex characters). */
   id: string;
   workspaceId: string;
   name: string;
   status: EvalStatus;
   mode: EvalMode;
+  /** The models evaluated: catalog ids, artifacts (`name@version`) or models the inference endpoint serves. */
   models: Array<string>;
+  /** The model the summary compares the others with (`vs_baseline`); null for none. */
   baseline: string | null;
   taskSource: {
     kind: "dataset";
@@ -517,11 +520,17 @@ export interface EvalRun {
     version: number;
   };
   rubric: Array<EvalRubricItem>;
+  /** Answers generated per task and model. */
   samples: number;
+  /** Sampling temperature of the model calls. */
   temperature: number;
+  /** The most tokens each answer may have. */
   maxTokens: number;
+  /** Score at or above which a task passes. */
   passThreshold: number;
+  /** The judge models the rubric calls. */
   judgeModels: Array<string>;
+  /** Code scorers that run in the SDK process; the eval waits in `awaiting_scores` until they post their scores. */
   localScorers: Array<string>;
   progress: {
     totalOutputs: number;
@@ -529,14 +538,17 @@ export interface EvalRun {
     pendingLocalScores: number;
   };
   summary: Array<EvalModelSummary>;
+  /** Cost of the model and judge calls so far, in USD. */
   totalCostUsd: number;
   /** Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed. */
   scoredDatasetVersion: number | null;
+  /** Why the eval failed; null otherwise. */
   error: string | null;
   /** While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise. */
   waitingReason: ("capacity_unavailable" | "rate_limited" | "inference_unavailable") | null;
   createdAt: string;
   updatedAt: string;
+  /** When the eval reached a final status; null until then. */
   completedAt: string | null;
 }
 
@@ -767,15 +779,23 @@ export interface PlanCostBreakdown {
 
 export interface PlanEvalRequest {
   name?: string | undefined;
+  /** The models to evaluate: catalog ids, artifacts (`name@version`) or models your inference endpoint serves. */
   models: Array<string>;
+  /** One of `models`; the summary reports every other model's difference from it. */
   baseline?: string | undefined;
+  /** The dataset whose records are the tasks. */
   dataset: string;
+  /** The version to evaluate. Default: the current one, pinned when the eval is created. */
   datasetVersion?: number | undefined;
   /** Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator. */
   rubric?: Array<EvalRubricItem> | undefined;
+  /** Answers per task and model; 3 or more for decisions you will act on. */
   samples?: number | undefined;
+  /** Sampling temperature of the model calls. */
   temperature?: number | undefined;
+  /** The most tokens each answer may have. */
   maxTokens?: number | undefined;
+  /** Evaluate only the first `limit` tasks. */
   limit?: number | undefined;
   /** Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise. */
   passThreshold?: number | null | undefined;

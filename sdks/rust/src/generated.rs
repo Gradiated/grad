@@ -860,31 +860,43 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EvalRun {
+    /// Eval id (`eval_` and 24 hex characters).
     pub id: String,
     pub workspace_id: String,
     pub name: String,
     pub status: EvalStatus,
     pub mode: EvalMode,
+    /// The models evaluated: catalog ids, artifacts (`name@version`) or models the inference endpoint serves.
     pub models: Vec<String>,
+    /// The model the summary compares the others with (`vs_baseline`); null for none.
     pub baseline: Option<String>,
     pub task_source: EvalRunTaskSource,
     pub rubric: Vec<EvalRubricItem>,
+    /// Answers generated per task and model.
     pub samples: i64,
+    /// Sampling temperature of the model calls.
     pub temperature: f64,
+    /// The most tokens each answer may have.
     pub max_tokens: i64,
+    /// Score at or above which a task passes.
     pub pass_threshold: f64,
+    /// The judge models the rubric calls.
     pub judge_models: Vec<String>,
+    /// Code scorers that run in the SDK process; the eval waits in `awaiting_scores` until they post their scores.
     pub local_scorers: Vec<String>,
     pub progress: EvalRunProgress,
     pub summary: Vec<EvalModelSummary>,
+    /// Cost of the model and judge calls so far, in USD.
     pub total_cost_usd: f64,
     /// Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
     pub scored_dataset_version: Option<i64>,
+    /// Why the eval failed; null otherwise.
     pub error: Option<String>,
     /// While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
     pub waiting_reason: Option<EvalRunWaitingReason>,
     pub created_at: String,
     pub updated_at: String,
+    /// When the eval reached a final status; null until then.
     pub completed_at: Option<String>,
 }
 
@@ -1269,21 +1281,29 @@ pub struct PlanCostBreakdown {
 pub struct PlanEvalRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The models to evaluate: catalog ids, artifacts (`name@version`) or models your inference endpoint serves.
     pub models: Vec<String>,
+    /// One of `models`; the summary reports every other model's difference from it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline: Option<String>,
+    /// The dataset whose records are the tasks.
     pub dataset: String,
+    /// The version to evaluate. Default: the current one, pinned when the eval is created.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset_version: Option<i64>,
     /// Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rubric: Option<Vec<EvalRubricItem>>,
+    /// Answers per task and model; 3 or more for decisions you will act on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub samples: Option<i64>,
+    /// Sampling temperature of the model calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    /// The most tokens each answer may have.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i64>,
+    /// Evaluate only the first `limit` tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<i64>,
     /// Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.

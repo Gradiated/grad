@@ -85,18 +85,49 @@ export type EvalRubricItem = z.infer<typeof EvalRubricItemSchema>;
 export const PlanEvalRequestSchema = z
   .object({
     name: SlugSchema.default("eval-run"),
-    models: z.array(z.string().min(1).max(200)).min(1).max(16),
-    baseline: z.string().min(1).max(200).optional(),
-    dataset: SlugSchema,
-    dataset_version: z.number().int().min(1).optional(),
+    models: z.array(z.string().min(1).max(200)).min(1).max(16).openapi({
+      description:
+        "The models to evaluate: catalog ids, artifacts (`name@version`) or models your inference endpoint serves.",
+    }),
+    baseline: z.string().min(1).max(200).optional().openapi({
+      description:
+        "One of `models`; the summary reports every other model's difference from it.",
+    }),
+    dataset: SlugSchema.openapi({
+      description: "The dataset whose records are the tasks.",
+    }),
+    dataset_version: z.number().int().min(1).optional().openapi({
+      description:
+        "The version to evaluate. Default: the current one, pinned when the eval is created.",
+    }),
     rubric: z.array(EvalRubricItemSchema).min(1).max(32).optional().openapi({
       description:
         "Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator.",
     }),
-    samples: z.number().int().min(1).max(32).default(1),
-    temperature: z.number().min(0).max(2).default(0.7),
-    max_tokens: z.number().int().min(1).max(32_768).default(1024),
-    limit: z.number().int().min(1).max(100_000).optional(),
+    samples: z.number().int().min(1).max(32).default(1).openapi({
+      description:
+        "Answers per task and model; 3 or more for decisions you will act on.",
+    }),
+    temperature: z
+      .number()
+      .min(0)
+      .max(2)
+      .default(0.7)
+      .openapi({ description: "Sampling temperature of the model calls." }),
+    max_tokens: z
+      .number()
+      .int()
+      .min(1)
+      .max(32_768)
+      .default(1024)
+      .openapi({ description: "The most tokens each answer may have." }),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .optional()
+      .openapi({ description: "Evaluate only the first `limit` tasks." }),
     pass_threshold: z.number().min(0).max(1).nullable().default(null).openapi({
       description:
         "Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.",
@@ -184,37 +215,72 @@ export const RECORD_MODEL = "record";
 
 export const EvalRunSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Eval id (`eval_` and 24 hex characters)." }),
     workspace_id: z.string().min(1),
     name: SlugSchema,
     status: EvalStatusSchema,
     mode: EvalModeSchema,
-    models: z.array(z.string()),
-    baseline: z.string().nullable(),
+    models: z.array(z.string()).openapi({
+      description:
+        "The models evaluated: catalog ids, artifacts (`name@version`) or models the inference endpoint serves.",
+    }),
+    baseline: z.string().nullable().openapi({
+      description:
+        "The model the summary compares the others with (`vs_baseline`); null for none.",
+    }),
     task_source: z.object({
       kind: z.literal("dataset"),
       dataset: SlugSchema,
       version: z.number().int().min(0),
     }),
     rubric: z.array(EvalRubricItemSchema),
-    samples: z.number().int().min(1),
-    temperature: z.number().min(0).max(2),
-    max_tokens: z.number().int().min(1),
-    pass_threshold: z.number().min(0).max(1),
-    judge_models: z.array(z.string()),
-    local_scorers: z.array(z.string()),
+    samples: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "Answers generated per task and model." }),
+    temperature: z
+      .number()
+      .min(0)
+      .max(2)
+      .openapi({ description: "Sampling temperature of the model calls." }),
+    max_tokens: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "The most tokens each answer may have." }),
+    pass_threshold: z
+      .number()
+      .min(0)
+      .max(1)
+      .openapi({ description: "Score at or above which a task passes." }),
+    judge_models: z
+      .array(z.string())
+      .openapi({ description: "The judge models the rubric calls." }),
+    local_scorers: z.array(z.string()).openapi({
+      description:
+        "Code scorers that run in the SDK process; the eval waits in `awaiting_scores` until they post their scores.",
+    }),
     progress: z.object({
       total_outputs: z.number().int().min(0),
       generated: z.number().int().min(0),
       pending_local_scores: z.number().int().min(0),
     }),
     summary: z.array(EvalModelSummarySchema),
-    total_cost_usd: z.number().min(0),
+    total_cost_usd: z.number().min(0).openapi({
+      description: "Cost of the model and judge calls so far, in USD.",
+    }),
     scored_dataset_version: z.number().int().min(1).nullable().openapi({
       description:
         "Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.",
     }),
-    error: z.string().nullable(),
+    error: z
+      .string()
+      .nullable()
+      .openapi({ description: "Why the eval failed; null otherwise." }),
     waiting_reason: z
       .enum(["capacity_unavailable", "rate_limited", "inference_unavailable"])
       .nullable()
@@ -224,7 +290,9 @@ export const EvalRunSchema = z
       }),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
-    completed_at: IsoTimestampSchema.nullable(),
+    completed_at: IsoTimestampSchema.nullable().openapi({
+      description: "When the eval reached a final status; null until then.",
+    }),
   })
   .openapi("EvalRun");
 
