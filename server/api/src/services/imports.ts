@@ -38,6 +38,7 @@ import {
 import { toPublicArtifact } from "./artifacts.js";
 import type { DatasetService } from "./datasets.js";
 import {
+  assertCompletion,
   fenceOf,
   closedBy,
   holdsLease,
@@ -539,6 +540,7 @@ export const createImportService = (
         }
         throw leaseLost(id);
       }
+      assertCompletion(job, body.status);
 
       const now = clock.now().toISOString();
       if (body.status === "abandoned") {

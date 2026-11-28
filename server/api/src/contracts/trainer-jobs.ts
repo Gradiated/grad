@@ -466,7 +466,7 @@ export const CompleteJobRequestSchema = z
     ...AttemptRefShape,
     status: z.enum(COMPLETION_STATUSES).openapi({
       description:
-        "`abandoned` hands the attempt back (shutdown, reclaimed compute, a worker error): the job requeues at once and resumes from its latest checkpoint.",
+        "How the attempt ended. A train attempt ends as completed, stopped_budget, failed or abandoned; an eval or import attempt as completed, failed or abandoned. Any other status is refused (422 unsupported_completion) and changes nothing, except for a job the user cancelled, which closes as cancelled whatever its worker reports. `abandoned` hands the attempt back (shutdown, reclaimed compute, a worker error): the job requeues at once and resumes from its latest checkpoint.",
     }),
     reason: InterruptionReasonSchema.exclude(["lease_lost"])
       .optional()

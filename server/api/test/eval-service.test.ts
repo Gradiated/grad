@@ -643,11 +643,12 @@ describe("eval service", () => {
     await running;
     const released = await t.deps.store.jobs.getById(created.id);
     // In-flight outputs were posted; a graceful stop counts as reclaimed
-    // compute, never toward max_attempts.
+    // compute, never toward max_attempts, and the outputs it kept start the
+    // preemption count again.
     expect(released).toMatchObject({
       status: "queued",
       failed_attempts: 0,
-      preemptions: 1,
+      preemptions: 0,
     });
     expect(
       (await t.services.evals.get(WORKSPACE_A, created.id)).progress.generated,

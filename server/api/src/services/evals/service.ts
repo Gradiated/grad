@@ -55,6 +55,7 @@ import type {
 import { streamVersionGzip, writeRecordsPart } from "../dataset-records.js";
 import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
+  assertCompletion,
   fenceOf,
   closedBy,
   holdsLease,
@@ -441,6 +442,10 @@ export const createEvalService = (
           preempted
             ? {
                 maxPreemptions: deps.settings.maxPreemptions,
+                // Outputs outlive the attempt: the next one skips them.
+                progressed:
+                  (await store.evals.attemptUsage(row.id, row.attempt)).tokens >
+                  0,
               }
             : undefined,
         ) as Parameters<typeof store.evals.update>[1],
@@ -751,6 +756,7 @@ export const createEvalService = (
       }
       throw leaseLost(id);
     }
+    assertCompletion(job, body.status);
     const now = clock.now().toISOString();
     if (job.status === "cancelled") {
       // Cancelled while it ran: whatever the worker reports, it ends here.
@@ -771,16 +777,11 @@ export const createEvalService = (
         now,
         reason === "compute_reclaimed",
       );
-    } else if (body.status === "failed") {
+    } else {
       await failAttempt(
         job,
         expect,
         body.error ?? "The eval worker reported a failure.",
-      );
-    } else {
-      throw invalid(
-        "unsupported_completion",
-        `Eval '${id}' is ${job.status}: its attempt completes as completed, failed or abandoned, not '${body.status}'.`,
       );
     }
 

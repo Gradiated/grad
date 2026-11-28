@@ -3,8 +3,9 @@ import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import type { RecipeKind, TrainerJob } from "../contracts.js";
 import type { InterruptionReason } from "../contracts/runs.js";
 import type { AppDependencies } from "../deps.js";
-import { ApiError, conflict, notFound } from "../errors.js";
+import { ApiError, conflict, invalid, notFound } from "../errors.js";
 import {
+  COMPLETION_STATUSES,
   WORKER_STAT_PHASES,
   type WorkerStatsSchema,
 } from "../contracts/trainer-jobs.js";
@@ -136,6 +137,33 @@ export interface JobKindHandler {
   onLeaseLost(job: JobRow, fence: JobExpectation, now: Date): Promise<void>;
 }
 
+type CompletionStatus = (typeof COMPLETION_STATUSES)[number];
+
+/**
+ * How an attempt of each kind may end. `cancelled` is not on the list: a job
+ * the user cancelled closes as cancelled whatever its worker reports, and a
+ * worker never cancels a job on its own.
+ */
+const COMPLETIONS: Record<JobKind, readonly CompletionStatus[]> = {
+  train: ["completed", "stopped_budget", "failed", "abandoned"],
+  eval: ["completed", "failed", "abandoned"],
+  import: ["completed", "failed", "abandoned"],
+};
+
+/** 422 unsupported_completion, before anything changes, for a status the job's kind doesn't have. */
+export const assertCompletion = (
+  job: Pick<JobRow, "id" | "kind" | "status">,
+  status: CompletionStatus,
+): void => {
+  const allowed = COMPLETIONS[job.kind];
+  if (job.status === "cancelled" || allowed.includes(status)) return;
+
+  throw invalid(
+    "unsupported_completion",
+    `Job '${job.id}' is a ${job.kind} job: its attempt completes as ${allowed.join(", ")}, not '${status}'.`,
+  );
+};
+
 export const leaseLost = (id: string): ApiError =>
   conflict(
     "lease_lost",
@@ -203,8 +231,10 @@ export const fenceOf = (
  * them happened since creation or the last resume. Preemptions (a worker
  * told to stop by its platform: SIGTERM, a cloud termination notice) are not the job's
  * fault and lose at most the grace period's work, so they have their own,
- * generous cap instead: on preemptions in a row that saved nothing
- * (`progressed`, a checkpoint this attempt, starts the count again).
+ * generous cap instead: on preemptions in a row that saved nothing.
+ * `progressed` starts the count again: a run's checkpoint or an eval's
+ * outputs from this attempt (the next attempt resumes from them). An import
+ * restarts from scratch, so its reclaims always count.
  */
 export const requeuePatch = (
   job: Pick<

@@ -65,6 +65,7 @@ import { labelRecords, settleLabelledRuns } from "./router-labels.js";
 import {
   fenceOf,
   closedBy,
+  assertCompletion,
   isSettled,
   isTerminal,
   holdsLease,
@@ -1297,6 +1298,7 @@ export const createRunLifecycle = (
         }
         throw leaseLost(id);
       }
+      assertCompletion(run, body.status);
       observePhaseEnd(run, null);
 
       const wantsArtifact =
