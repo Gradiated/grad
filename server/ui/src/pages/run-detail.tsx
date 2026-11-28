@@ -4,7 +4,7 @@ import type { Artifact, Checkpoint, Run } from "@sdk/generated/models.js";
 
 import { LineChart, smooth, type ChartColor } from "../components/chart.js";
 import { IconChevron, IconDownload, IconPlay, IconRuns as IconChart, IconStop } from "../components/icons.js";
-import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
+import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Kv, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { CODEC, convertKeys, errorMessage, isTerminalRun, lifecycleOf, useApi, type RunLifecycle, type RunPhase } from "../lib/api.js";
 import { evalLossOf, foldCheckpoints, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
 import { ago, bytes, compact, dateTime, duration, int, num, time, toYaml, usd } from "../lib/format.js";
@@ -494,13 +494,6 @@ const EvalReportCard = ({ run }: { run: Run }) => {
   );
 };
 
-const Kv = ({ label, value }: { label: string; value: ReactNode }) => (
-  <>
-    <dt>{label}</dt>
-    <dd>{value}</dd>
-  </>
-);
-
 const LARGE_DOWNLOAD = 2 * 1024 ** 3;
 
 const ArtifactCard = ({ id }: { id: string }) => {
@@ -543,7 +536,14 @@ const ArtifactCard = ({ id }: { id: string }) => {
       {a ? (
         <div className="stack">
           <dl className="kv">
-            <Kv label="Name" value={<span className="mono">{`${a.name}@${a.version}`}</span>} />
+            <Kv
+              label="Name"
+              value={
+                <Link className="link mono" href={`/artifacts/${encodeURIComponent(a.id)}`}>
+                  {`${a.name}@${a.version}`}
+                </Link>
+              }
+            />
             <Kv label="Format" value={a.format ?? "—"} />
             <Kv label="Base model" value={<span className="mono">{a.baseModel}</span>} />
             <Kv label="SHA-256" value={<span className="mono faint">{a.sha256}</span>} />

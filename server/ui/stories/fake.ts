@@ -346,6 +346,41 @@ const IMPORT: Wire = {
   updated_at: iso(NOW - 8 * 60_000),
 };
 
+const TRAINED_ARTIFACT: Wire = { ...(artifact as Wire), run_id: RUNS.finished.id, provenance: { source: "run", run_id: RUNS.finished.id, uploader: null, uri: null }, created_at: iso(NOW - 80 * 60_000) };
+
+export const ARTIFACTS: Wire[] = [
+  {
+    ...TRAINED_ARTIFACT,
+    id: "sql-lora@2026-11-27-2",
+    name: "sql-lora",
+    version: "2026-11-27-2",
+    run_id: null,
+    format: "peft_lora",
+    base_model: "qwen/qwen3-8b",
+    size_bytes: 84_000_000,
+    provenance: { source: "upload", run_id: null, uploader: "key_7f3a9c21", uri: null },
+    pins: [
+      { artifact_id: "sql-lora@2026-11-27-2", holder: "inference:version:7b1c", reason: "acme/sql v3", created_at: iso(NOW - 20 * 60_000) },
+      { artifact_id: "sql-lora@2026-11-27-2", holder: "inference:version:9d2e", reason: "acme/sql-eval (eval lane)", created_at: iso(NOW - 5 * 60_000) },
+    ],
+    created_at: iso(NOW - 26 * 60 * 60_000),
+  },
+  TRAINED_ARTIFACT,
+  {
+    ...TRAINED_ARTIFACT,
+    id: "support-embedder@2026-11-26-1",
+    name: "support-embedder",
+    version: "2026-11-26-1",
+    run_id: null,
+    format: "encoder_safetensors",
+    recipe_kind: "embedding",
+    base_model: "BAAI/bge-small-en-v1.5",
+    size_bytes: 133_500_000,
+    provenance: { source: "import", run_id: null, uploader: null, uri: "hf://acme/support-embedder@4f0c1b2a9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a" },
+    created_at: iso(NOW - 2 * 86_400_000),
+  },
+];
+
 const DATASETS = ["support-prod", "support-holdout", "router-labels", "sql-quickstart"].map((name, i) => ({
   ...(dataset as Wire),
   id: `ds_${i}a8c2e4f6b1d3057`,
@@ -370,7 +405,13 @@ export const workspace = (over: Routes = {}): Routes => {
       ]),
     ),
     ...Object.fromEntries(allRuns.map((r) => [`GET /v1/runs/${r.id}/checkpoints`, checkpointsFor(r, Number(r.current_step))])),
-    "GET /v1/artifacts/:id": artifact as Wire,
+    "GET /v1/artifacts": { data: ARTIFACTS, next_cursor: null },
+    "GET /v1/artifacts/:id": (url) => json(ARTIFACTS.find((a) => url.pathname.endsWith(`/${encodeURIComponent(String(a.id))}`)) ?? TRAINED_ARTIFACT),
+    "GET /v1/artifacts/:id/download-url": (url) => json({ url: `${location.origin}/story-download${url.pathname}`, expires_at: iso(NOW + 15 * 60_000), sha256: TRAINED_ARTIFACT.sha256, size_bytes: 84_000_000, filename: "artifact.grad.tar.gz" }),
+    "DELETE /v1/artifacts/:id": (url) =>
+      ARTIFACTS.find((a) => url.pathname.endsWith(`/${encodeURIComponent(String(a.id))}`) && (a.pins as unknown[]).length > 0)
+        ? problem(409, "artifact_pinned", "Artifact 'sql-lora@2026-11-27-2' is pinned by inference:version:7b1c (acme/sql v3), inference:version:9d2e (acme/sql-eval (eval lane)), so it can't be deleted. Unpublish it there first (that removes the pin).")
+        : new Response(null, { status: 204 }),
     "GET /v1/datasets": { data: DATASETS, next_cursor: null },
     "GET /v1/datasets/:name": (url) => json(DATASETS.find((d) => url.pathname.endsWith(`/${d.name}`)) ?? DATASETS[0]),
     "GET /v1/datasets/:name/records": records as Wire,

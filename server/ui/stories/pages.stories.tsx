@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
 import { Console } from "./console.js";
-import { json, never, problem, RUNS, workspace } from "./fake.js";
+import { ARTIFACTS, json, never, problem, RUNS, workspace } from "./fake.js";
 
 const meta = {
   title: "Pages",
@@ -56,6 +56,38 @@ export const RunNotFound: Story = {
 export const Datasets: Story = { args: { path: "/datasets" } };
 export const DatasetsEmpty: Story = { name: "Datasets / empty", args: { path: "/datasets", routes: workspace({ "GET /v1/datasets": { data: [], next_cursor: null } }) } };
 export const DatasetDetail: Story = { name: "Dataset / records, sources, imports", args: { path: "/datasets/support-prod" } };
+export const Artifacts: Story = { args: { path: "/artifacts" } };
+export const ArtifactsEmpty: Story = { name: "Artifacts / empty", args: { path: "/artifacts", routes: workspace({ "GET /v1/artifacts": { data: [], next_cursor: null } }) } };
+export const ArtifactsLoading: Story = { name: "Artifacts / loading", args: { path: "/artifacts", routes: workspace({ "GET /v1/artifacts": () => never() }) } };
+export const ArtifactsError: Story = {
+  name: "Artifacts / error",
+  args: { path: "/artifacts", routes: workspace({ "GET /v1/artifacts": () => problem(403, "forbidden", "This key may not read artifacts in workspace ws_demo.") }) },
+};
+const artifactPath = (i: number) => `/artifacts/${encodeURIComponent(String(ARTIFACTS[i]?.id))}`;
+export const ArtifactPinned: Story = { name: "Artifact / pinned upload", args: { path: artifactPath(0) } };
+export const ArtifactFromRun: Story = { name: "Artifact / trained by a run", args: { path: artifactPath(1) } };
+export const ArtifactImported: Story = { name: "Artifact / imported from the Hub", args: { path: artifactPath(2) } };
+/** Delete on a pinned artifact: the dialog shows the server's 409 naming the holders. */
+export const ArtifactDeleteRefused: Story = {
+  name: "Artifact / delete refused (pinned)",
+  args: { path: artifactPath(0) },
+  play: async ({ canvasElement }) => {
+    const button = async (scope: string, label: string) => {
+      for (let i = 0; i < 100; i++) {
+        const found = [...canvasElement.querySelectorAll<HTMLButtonElement>(`${scope} button`)].find((b) => b.textContent?.trim() === label);
+        if (found) return found;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error(`no ${label} button`);
+    };
+    (await button(".page-header", "Delete")).click();
+    (await button(".dialog", "Delete")).click();
+  },
+};
+export const ArtifactNotFound: Story = {
+  name: "Artifact / not found",
+  args: { path: "/artifacts/missing%401", routes: workspace({ "GET /v1/artifacts/:id": () => problem(404, "artifact_not_found", "Artifact 'missing@1' not found.") }) },
+};
 export const Evals: Story = { args: { path: "/evals" } };
 export const EvalDetail: Story = { name: "Eval / summary and failures", args: { path: "/evals/eval_5a7c9e1b3d2f40688a6c4e20" } };
 export const EvalRunning: Story = { name: "Eval / running", args: { path: "/evals/eval_8c0e2a4b6d1f39577e9b1d3f" } };

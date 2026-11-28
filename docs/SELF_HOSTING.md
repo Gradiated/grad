@@ -84,6 +84,7 @@ What it shows (read-mostly):
 
 - **Runs**: every run with its status, phase, recipe, model, dataset version, cost against its cap and age, filterable by status and name.
 - **Run detail**: a header with status, phase and attempt N/M; a lifecycle strip (queued, starting, training, uploading, done) with interruption and "waiting for a worker" notices; live loss and eval-loss, learning-rate, throughput and cost-versus-cap charts; checkpoints with a **Promote** button; the event timeline (phases, attempts, interruptions, resumes, warnings, checkpoints); the eval report for the run's recipe; the artifact with a download button and the `grad artifacts download` command; the resolved config as YAML; **Cancel** and **Resume** (optionally with a new cost cap).
+- **Artifacts**: every artifact as `name@version` with its format, base model, provenance (the run that trained it, the uploader, or the Hub revision it was imported from), size, age and whether a holder pins it, filterable by name, model or format. An artifact's page shows its details, provenance, pins (holder and reason) and manifest, a **Download** button (a short-lived presigned URL from `GET /v1/artifacts/{id}/download-url`, straight from storage) and **Delete**, which a pinned artifact refuses with the server's `409 artifact_pinned` naming its holders.
 - **Datasets**: versions, a record preview with merged scores, sources with their schedule, last sync status and last error plus a **Sync** button, and recent imports.
 - **Evals**: summary tables with scores, 95% CIs, pass@k, the delta against the baseline, and failures.
 - **Usage**: a date range (presets or from/to, UTC) with the total cost and tokens, a breakdown by kind (training, evals, dataset scoring, labeling, teacher answers), groups by day, week, month, model, recipe or kind, the top runs and evals, and the period's newest billed rows.
@@ -238,7 +239,7 @@ Serving needs only `artifacts/`: a read-only role scoped to that prefix can load
 
 ### Artifact pins
 
-A pin keeps a released artifact alive for a holder, such as a model version Gradiated Cloud published. `POST /v1/artifacts/{id}/pins` (`{"holder": "...", "reason": "..."}`) and `DELETE /v1/artifacts/{id}/pins/{holder}` need the `artifacts:pin` scope (only `admin` implies it); they are internal endpoints, left out of the SDKs. Pins reference the artifact with `ON DELETE RESTRICT`, so nothing deletes a pinned artifact's record: `DELETE /v1/artifacts/{id}` answers `409 artifact_pinned` naming the holders, and retention, the orphaned-blob sweep and any future workspace cleanup can't remove it either.
+A pin keeps a released artifact alive for a holder, such as a model version Gradiated Cloud published. `POST /v1/artifacts/{id}/pins` (`{"holder": "...", "reason": "..."}`) and `DELETE /v1/artifacts/{id}/pins/{holder}` need the `artifacts:pin` scope (only `admin` implies it); they are internal endpoints, left out of the SDKs. Pins reference the artifact with `ON DELETE RESTRICT`, so nothing deletes a pinned artifact's record: `DELETE /v1/artifacts/{id}` answers `409 artifact_pinned` naming the holders (every artifact read lists them in `pins`), and retention, the orphaned-blob sweep and any future workspace cleanup can't remove it either.
 
 ## Eval workers
 

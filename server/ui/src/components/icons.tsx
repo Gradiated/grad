@@ -20,6 +20,12 @@ export const IconDatasets = () => (
     <path d="M2.75 8c0 .97 2.35 1.75 5.25 1.75S13.25 8.97 13.25 8" />
   </Svg>
 );
+export const IconArtifacts = () => (
+  <Svg>
+    <path d="M8 1.75 13.5 4.75v6.5L8 14.25 2.5 11.25v-6.5L8 1.75Z" />
+    <path d="M2.5 4.75 8 7.75l5.5-3M8 7.75v6.5" />
+  </Svg>
+);
 export const IconEvals = () => (
   <Svg>
     <path d="M3 13.25V8.5M8 13.25V2.75M13 13.25V6" />

@@ -58,6 +58,13 @@ export const Stat = ({ label, value, hint }: { label: ReactNode; value: ReactNod
   </div>
 );
 
+export const Kv = ({ label, value }: { label: string; value: ReactNode }) => (
+  <>
+    <dt>{label}</dt>
+    <dd>{value}</dd>
+  </>
+);
+
 export const Empty = ({ title, icon, children }: { title: ReactNode; icon?: ReactNode; children?: ReactNode }) => (
   <div className="empty">
     <span className="empty-icon" aria-hidden="true">

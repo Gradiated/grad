@@ -114,6 +114,7 @@ afterEach(() => {
   app?.unmount();
   app = undefined;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const boot = async (server = fakeServer(routes()), path = "/") => {
@@ -435,6 +436,135 @@ describe("datasets, evals, usage, health", () => {
   it("renders a not-found page for unknown routes", async () => {
     const { container } = await boot(undefined, "/nope");
     await waitFor(() => expect(container.textContent).toContain("Nothing here"));
+  });
+});
+
+describe("artifacts", () => {
+  const TRAINED = fixture<Record<string, unknown>>("artifact.json");
+  const UPLOADED = {
+    ...TRAINED,
+    id: "sql-lora@2026-11-28-1",
+    name: "sql-lora",
+    version: "2026-11-28-1",
+    run_id: null,
+    format: "peft_lora",
+    size_bytes: 84_000_000,
+    provenance: { source: "upload", run_id: null, uploader: "key_admin", uri: null },
+    pins: [{ artifact_id: "sql-lora@2026-11-28-1", holder: "inference:version:7b1c", reason: "acme/sql v3", created_at: "2026-11-28T01:00:00Z" }],
+  };
+  const IMPORTED = {
+    ...TRAINED,
+    id: "hub-lora@2026-11-28-1",
+    name: "hub-lora",
+    version: "2026-11-28-1",
+    run_id: null,
+    format: "peft_lora",
+    provenance: { source: "import", run_id: null, uploader: null, uri: `hf://acme/hub-lora@${"a".repeat(40)}` },
+  };
+  const artifactRoutes = (extra: Record<string, unknown> = {}) =>
+    routes({
+      "GET /v1/artifacts": { data: [UPLOADED, IMPORTED, TRAINED], next_cursor: null },
+      "GET /v1/artifacts/:id": ({ url }: { url: URL }) => json([UPLOADED, IMPORTED, TRAINED].find((a) => url.pathname.endsWith(`/${encodeURIComponent(String(a.id))}`)) ?? TRAINED),
+      ...extra,
+    });
+
+  it("lists name@version, format, base model, provenance, size, created and pins; filters by text", async () => {
+    const { container } = await boot(fakeServer(artifactRoutes()), "/runs");
+    await waitFor(() => expect(byText(container, ".nav-item", "Artifacts")).toBeTruthy());
+    await click(byText(container, ".nav-item", "Artifacts"));
+    await waitFor(() => expect(container.querySelectorAll("tbody tr.clickable").length).toBe(3));
+    const row = (name: string) => byText(container, "tbody tr", name)?.textContent ?? "";
+    expect(row("sql-lora@2026-11-28-1")).toMatch(/peft_lora.*test\/tiny-qwen3.*upload.*key_admin.*80\.1 MB.*pinned/);
+    expect(row("hub-lora@")).toContain(`hf://acme/hub-lora@${"a".repeat(40)}`);
+    expect(row("support-sft@")).toContain(String(TRAINED.run_id));
+    // The run link opens the run, not the artifact.
+    await click(byText(container, "tbody tr a", String(TRAINED.run_id)));
+    expect(location.pathname).toBe(`/runs/${String(TRAINED.run_id)}`);
+    navigate("/artifacts");
+    await waitFor(() => expect(container.querySelectorAll("tbody tr.clickable").length).toBe(3));
+    await type(container.querySelector('input[aria-label="Filter artifacts"]'), "hub");
+    await waitFor(() => expect(container.querySelectorAll("tbody tr.clickable").length).toBe(1));
+    await type(container.querySelector('input[aria-label="Filter artifacts"]'), "nothing-matches");
+    await waitFor(() => expect(container.textContent).toContain("No artifacts match"));
+  });
+
+  it("shows an empty state", async () => {
+    const { container } = await boot(fakeServer(artifactRoutes({ "GET /v1/artifacts": { data: [], next_cursor: null } })), "/artifacts");
+    await waitFor(() => expect(container.textContent).toContain("No artifacts yet"));
+  });
+
+  it("opens an artifact with its manifest, provenance and pins, and downloads it through a presigned URL", async () => {
+    const opened: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      opened.push(this.href);
+    });
+    const server = fakeServer(
+      artifactRoutes({
+        "GET /v1/artifacts/:id/download-url": { url: "https://bucket.s3.example/artifacts/b?X-Amz-Signature=sig", expires_at: "2026-11-28T02:00:00Z", sha256: "ab".repeat(32), size_bytes: 84_000_000, filename: "sql-lora-2026-11-28-1.grad.tar.gz" },
+      }),
+    );
+    const { container } = await boot(server, "/artifacts");
+    await waitFor(() => expect(byText(container, "tbody tr", "sql-lora@")).toBeTruthy());
+    await click(byText(container, "tbody tr", "sql-lora@"));
+    await waitFor(() => expect(container.querySelector("h1")?.textContent).toBe("sql-lora@2026-11-28-1"));
+    expect(location.pathname).toBe("/artifacts/sql-lora%402026-11-28-1");
+    const text = container.textContent ?? "";
+    expect(text).toContain("inference:version:7b1c");
+    expect(text).toContain("acme/sql v3");
+    expect(text).toContain("key_admin");
+    expect(container.querySelector("pre.code")?.textContent).toContain('"schema": "grad.artifact/1"');
+    expect(text).toContain("grad artifacts download sql-lora@2026-11-28-1 --output ./sql-lora");
+    await click(byText(container, ".page-header button", "Download"));
+    await waitFor(() => expect(opened).toEqual(["https://bucket.s3.example/artifacts/b?X-Amz-Signature=sig"]));
+    expect(server.calls.some((c) => c.path === "/v1/artifacts/sql-lora%402026-11-28-1/download-url")).toBe(true);
+  });
+
+  it("deletes after confirmation; a pinned artifact shows the server's 409 naming its holders", async () => {
+    const deleted: string[] = [];
+    const server = fakeServer(
+      artifactRoutes({
+        "DELETE /v1/artifacts/:id": ({ url }: { url: URL }) => {
+          if (url.pathname.includes("sql-lora")) return problem(409, "artifact_pinned", "Artifact 'sql-lora@2026-11-28-1' is pinned by inference:version:7b1c (acme/sql v3), so it can't be deleted. Unpublish it there first (that removes the pin).");
+          deleted.push(url.pathname);
+          return new Response(null, { status: 204 });
+        },
+      }),
+    );
+    const { container } = await boot(server, "/artifacts/sql-lora%402026-11-28-1");
+    await waitFor(() => expect(byText(container, ".page-header button", "Delete")).toBeTruthy());
+    await click(byText(container, ".page-header button", "Delete"));
+    expect(container.querySelector(".dialog")?.textContent).toContain("It is pinned by inference:version:7b1c");
+    await click(byText(container, ".dialog button", "Delete"));
+    await waitFor(() => expect(container.querySelector(".dialog")?.textContent).toContain("is pinned by inference:version:7b1c (acme/sql v3), so it can't be deleted"));
+    expect(location.pathname).toBe("/artifacts/sql-lora%402026-11-28-1");
+    await click(byText(container, ".dialog button", "Cancel"));
+    expect(container.querySelector(".dialog")).toBeNull();
+
+    navigate(`/artifacts/${encodeURIComponent(String(IMPORTED.id))}`);
+    await waitFor(() => expect(container.querySelector("h1")?.textContent).toBe("hub-lora@2026-11-28-1"));
+    expect(container.textContent).toContain("Not pinned");
+    await click(byText(container, ".page-header button", "Delete"));
+    await click(byText(container, ".dialog button", "Delete"));
+    await waitFor(() => expect(location.pathname).toBe("/artifacts"));
+    expect(deleted).toEqual(["/v1/artifacts/hub-lora%402026-11-28-1"]);
+    await waitFor(() => expect(container.textContent).toContain("Deleted hub-lora@2026-11-28-1"));
+  });
+
+  it("shows the API error for a missing artifact and a failed download", async () => {
+    const { container } = await boot(
+      fakeServer(
+        artifactRoutes({
+          "GET /v1/artifacts/:id/download-url": () => problem(503, "storage_unavailable", "Object storage is unreachable."),
+          "GET /v1/artifacts/:id": ({ url }: { url: URL }) => (url.pathname.includes("missing") ? problem(404, "artifact_not_found", "No artifact missing@1.") : json(TRAINED)),
+        }),
+      ),
+      "/artifacts/missing%401",
+    );
+    await waitFor(() => expect(container.textContent).toContain("No artifact missing@1."));
+    navigate(`/artifacts/${encodeURIComponent(String(TRAINED.id))}`);
+    await waitFor(() => expect(byText(container, ".page-header button", "Download")).toBeTruthy());
+    await click(byText(container, ".page-header button", "Download"));
+    await waitFor(() => expect(container.textContent).toContain("Object storage is unreachable."));
   });
 });
 

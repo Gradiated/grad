@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app.js";
+import { navigate } from "../../src/lib/router.js";
 import { byText, click, mount, waitFor, type Mounted } from "../helpers.js";
 
 vi.mock("uplot", () => ({ default: class { setData() {} setSize() {} destroy() {} } }));
@@ -31,5 +32,19 @@ describe("web UI against a live grad-server", () => {
     await click(byText(app.container, "tbody tr", first.id));
     await waitFor(() => expect(app?.container.textContent).toContain("Checkpoints"), 20_000);
     await waitFor(() => expect(app?.container.querySelectorAll(".timeline li").length ?? 0).toBeGreaterThan(0), 20_000);
+  });
+
+  it("lists the artifacts and opens one", async () => {
+    if (!app) return;
+    const artifacts = (await (await fetch(`${base}/v1/artifacts?limit=1`, { headers: key ? { authorization: `Bearer ${key}` } : {} })).json()) as { data: { name: string; version: string }[] };
+    navigate("/artifacts");
+    await waitFor(() => expect(app?.container.querySelector("h1")?.textContent).toBe("Artifacts"), 20_000);
+    const first = artifacts.data[0];
+    if (!first) return;
+    const ref = `${first.name}@${first.version}`;
+    await waitFor(() => expect(byText(app!.container, "tbody tr", ref)).toBeTruthy(), 20_000);
+    await click(byText(app.container, "tbody tr", ref));
+    await waitFor(() => expect(app?.container.textContent).toContain("Provenance"), 20_000);
+    expect(app.container.querySelector("pre.code")?.textContent).toContain("grad.artifact/1");
   });
 });

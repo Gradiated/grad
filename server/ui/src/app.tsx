@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { IconDatasets, IconEvals, IconHealth, IconLogout, IconMoon, IconRuns, IconSun, IconUsage, Wordmark } from "./components/icons.js";
+import { IconArtifacts, IconDatasets, IconEvals, IconHealth, IconLogout, IconMoon, IconRuns, IconSun, IconUsage, Wordmark } from "./components/icons.js";
 import { Empty, ToastProvider } from "./components/ui.js";
 import { ApiContext, createApi, errorMessage, isUnauthorized, type Api } from "./lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey, type KeyStore } from "./lib/auth.js";
 import { Link, match, RouterProvider, useLocation } from "./lib/router.js";
 import { setTheme, useTheme } from "./lib/theme.js";
+import { ArtifactDetailPage, ArtifactsPage } from "./pages/artifacts.js";
 import { DatasetDetailPage, DatasetsPage } from "./pages/datasets.js";
 import { EvalDetailPage, EvalsPage } from "./pages/evals.js";
 import { HealthPage } from "./pages/health.js";
@@ -85,6 +86,7 @@ export const App = ({ baseURL = location.origin, store: given, fetch: fetchImpl 
 const NAV: { href: string; label: string; icon: ReactNode; prefix: string[] }[] = [
   { href: "/runs", label: "Runs", icon: <IconRuns />, prefix: ["/", "/runs"] },
   { href: "/datasets", label: "Datasets", icon: <IconDatasets />, prefix: ["/datasets"] },
+  { href: "/artifacts", label: "Artifacts", icon: <IconArtifacts />, prefix: ["/artifacts"] },
   { href: "/evals", label: "Evals", icon: <IconEvals />, prefix: ["/evals"] },
   { href: "/usage", label: "Usage", icon: <IconUsage />, prefix: ["/usage"] },
   { href: "/health", label: "Health", icon: <IconHealth />, prefix: ["/health"] },
@@ -150,6 +152,8 @@ export const route = (path: string): { node: ReactNode; title: string } => {
   if ((m = match("/runs/:id", path))) return { node: <RunDetailPage key={m.id} id={m.id as string} />, title: m.id as string };
   if (path === "/datasets") return { node: <DatasetsPage />, title: "Datasets" };
   if ((m = match("/datasets/:name", path))) return { node: <DatasetDetailPage key={m.name} name={m.name as string} />, title: m.name as string };
+  if (path === "/artifacts") return { node: <ArtifactsPage />, title: "Artifacts" };
+  if ((m = match("/artifacts/:id", path))) return { node: <ArtifactDetailPage key={m.id} id={m.id as string} />, title: m.id as string };
   if (path === "/evals") return { node: <EvalsPage />, title: "Evals" };
   if ((m = match("/evals/:id", path))) return { node: <EvalDetailPage key={m.id} id={m.id as string} />, title: m.id as string };
   if (path === "/usage") return { node: <UsagePage />, title: "Usage" };
