@@ -66,8 +66,8 @@ spec:
               app.kubernetes.io/instance: {{ $.Release.Name }}
               app.kubernetes.io/component: api
         {{- end }}
-      # SHUTDOWN_DRAIN_SECONDS (5) + background stop + 5 s for open requests.
-      terminationGracePeriodSeconds: 30
+      # The drain + background stop + 5 s for open requests, with margin.
+      terminationGracePeriodSeconds: {{ add (int .Values.api.shutdownDrainSeconds) 25 }}
       containers:
         - name: grad-server
           image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
@@ -89,9 +89,9 @@ spec:
             {{- if gt (int .Values.api.internalPort) 0 }}
             - {name: INTERNAL_PORT, value: {{ .Values.api.internalPort | quote }}}
             {{- end }}
-            # SIGTERM: readiness fails and the server keeps serving for 5 s while
-            # the endpoint is removed, then closes (server/api/src/shutdown.ts).
-            - {name: SHUTDOWN_DRAIN_SECONDS, value: "5"}
+            # SIGTERM: readiness fails and the server keeps serving while the
+            # endpoint is removed, then closes (server/api/src/shutdown.ts).
+            - {name: SHUTDOWN_DRAIN_SECONDS, value: {{ .Values.api.shutdownDrainSeconds | quote }}}
             - {name: AUTH_MODE, value: {{ .Values.api.authMode | quote }}}
             - {name: BILLING_MODE, value: {{ .Values.api.billingMode | quote }}}
             - {name: DEFAULT_WORKSPACE_ID, value: {{ .Values.api.defaultWorkspaceId | quote }}}

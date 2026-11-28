@@ -212,6 +212,11 @@
               "type": "integer"
             }
           }
+        },
+        "shutdownDrainSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 120
         }
       }
     },

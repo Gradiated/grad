@@ -2,7 +2,8 @@
 # Install the grad chart on a throwaway kind cluster and exercise it:
 # readiness, the migrations Job, worker auth by service-account token
 # (workers.auth=kubernetes), a run claimed by a `train` worker while both
-# API pods are force-deleted, `helm upgrade` and `helm uninstall`.
+# API pods are force-deleted, `helm upgrade` under traffic (no request may fail
+# while the API pods roll) and `helm uninstall`.
 #
 #   scripts/install-k8s-tools bin && PATH=$PWD/bin:$PATH tests/helm/smoke.sh
 #
@@ -126,9 +127,19 @@ kubectl -n "$NS" exec deploy/"$RELEASE-grad-api" -- node -e \
 echo "ok: /metrics exports grad_jobs_open"
 python3 "$ROOT/tests/helm/smoke.py" --namespace "$NS" --release "$RELEASE" --admin-key "$ADMIN_KEY"
 
-step "helm upgrade"
+step "helm upgrade under traffic: no request fails while the API pods roll"
+# From the import worker (the NetworkPolicy lets workers in), no retries.
+TRAFFIC=(kubectl -n "$NS" exec -i deploy/"$RELEASE-grad-worker-import" -c grad-trainer --)
+"${TRAFFIC[@]}" rm -f /tmp/traffic-stop
+"${TRAFFIC[@]}" python - "http://$RELEASE-grad-api:8787" "$ADMIN_KEY" /tmp/traffic-stop < "$ROOT/tests/helm/traffic.py" > "${TMPDIR:-/tmp}/grad-traffic.out" &
+TRAFFIC_PID=$!
+sleep 5
 helm upgrade "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" \
   --set api.env.MAX_ATTEMPTS=5 --wait --timeout 6m
+sleep 15  # the last old pod drains (5 s) and closes after --wait returns
+"${TRAFFIC[@]}" touch /tmp/traffic-stop
+wait "$TRAFFIC_PID" || { echo "FAIL: requests failed during the rolling upgrade: $(cat "${TMPDIR:-/tmp}/grad-traffic.out")" >&2; exit 1; }
+echo "ok: rolling upgrade under traffic: $(cat "${TMPDIR:-/tmp}/grad-traffic.out")"
 kubectl -n "$NS" get deploy "$RELEASE-grad-api" -o jsonpath='{.spec.template.spec.containers[0].env}' | grep -q MAX_ATTEMPTS
 kubectl -n "$NS" rollout status deploy/"$RELEASE-grad-api" --timeout 180s
 test "$(helm -n "$NS" history "$RELEASE" -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)[-1]["status"])')" = deployed
