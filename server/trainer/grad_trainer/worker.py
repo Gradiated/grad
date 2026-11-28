@@ -33,6 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,7 +51,7 @@ from .parts import Part, PartWriter
 from .records import MergedDataset
 from .sources import redact
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
-from .telemetry import WorkerTelemetry
+from .telemetry import WorkerTelemetry, recording_setup, setup_step, setup_summary
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
 JOB_KINDS = ("train", "import")
@@ -400,6 +401,11 @@ class _JobState:
     checkpoint_started: float | None = None
     checkpoint_seconds: float | None = None
     checkpoint_failures: int = 0  # in a row
+    # Setup up to the first training step (telemetry.setup_step seconds), reported once.
+    setup: dict[str, float] | None = None
+    setup_started: float | None = None
+    # The step report in flight (sent while the next step trains).
+    progress: Future[dict[str, Any]] | None = None
     # Compute reclaimed: save by this monotonic deadline, then hand the job back.
     reclaim_deadline: float | None = None
     emergency: bool = False
@@ -535,6 +541,10 @@ class TrainerWorker:
         self._shutdown = threading.Event()
         self._current: _JobState | None = None
         self._lock = threading.Lock()
+        # Step reports (trackers, then /progress) run here, one at a time and in order.
+        self._reports = ThreadPoolExecutor(max_workers=1, thread_name_prefix="grad-progress")
+        # Steps shorter than this report in the background (see _report_step).
+        self.background_report_max_step_s = 10.0
 
     # -- public API ---------------------------------------------------------
 
@@ -667,24 +677,58 @@ class TrainerWorker:
         except LeaseLost:
             pass
 
+    def _report_setup(self, state: _JobState, now: float) -> None:
+        """Once, at the first step: where the time from the claim to it went (a run note,
+        the worker's log and grad_trainer_setup_duration_seconds)."""
+        setup, state.setup = state.setup or {}, None
+        if state.phase == "training" and state.phase_at is not None:
+            setup["first_step"] = now - state.phase_at
+        total = now - (state.setup_started or now)
+        self.telemetry.observe_setup({**setup, "total": total})
+        summary = setup_summary(total, setup)
+        _log(summary, **{f"{k}_s": round(v, 2) for k, v in setup.items()}, total_s=round(total, 2))
+        self._note(state, "log", summary)
+
     def _report_step(self, state: _JobState, trackers: Loggers, metric: dict[str, Any]) -> bool:
+        """Reports a step: the trackers, then the /progress POST (a round trip to grad-server,
+        100-250 ms from a GPU host on another continent). Short steps (under
+        ``background_report_max_step_s``) don't wait for it: it runs while the next step
+        trains, and its answer (stop, lease lost) applies one step later, at most that many
+        seconds of extra compute. Longer steps wait, where the round trip costs under 2%."""
         point = {**metric}
         point.setdefault("timestamp", _now_iso())
-        trackers.log(point)
         tokens = point.get("tokens")
         if isinstance(tokens, (int, float)):
             state.max_tokens = max(state.max_tokens, int(tokens))
         self.telemetry.observe_step(tokens if isinstance(tokens, (int, float)) else None)
+        self._settle_progress(state)
+
+        def send() -> dict[str, Any]:
+            trackers.log(point)
+            return self._post(state, "progress", {"metric": point}, attempts=2)
+
+        state.progress = self._reports.submit(send)
+        if state.step_seconds is None or state.step_seconds >= self.background_report_max_step_s:
+            self._settle_progress(state)
+        return state.stop.is_set()
+
+    def _settle_progress(self, state: _JobState, *, quiet: bool = False) -> None:
+        """Waits for the step report in flight and applies its answer. ``quiet``: only wait
+        (the job is ending; its /complete gets the final word)."""
+        pending, state.progress = state.progress, None
+        if pending is None:
+            return
         try:
-            resp = self._post(state, "progress", {"metric": point}, attempts=2)
-        except WorkerAuthError:
+            resp = pending.result()
+        except (LeaseLost, WorkerAuthError):
+            if quiet:
+                return
             raise
-        except (ServerError, ServerUnreachable) as exc:
+        except Exception as exc:  # the server, the network, a tracker: the step stays reported locally
             _log(f"progress report skipped: {exc}", "warn")
-            return state.stop.is_set()
+            return
         if resp.get("should_stop"):
             state.request_stop(str(resp.get("stop_reason") or "cancelled"))
-        return state.stop.is_set()
 
     def _tracker_warning(self, state: _JobState, run: dict[str, Any], message: str) -> None:
         _log(f"run {run.get('id')}: {message}", "warn")
@@ -945,6 +989,7 @@ class TrainerWorker:
         """Retries until the server answers: completion is idempotent per attempt,
         and the bundle stays on disk meanwhile. Gives up only when the lease is
         lost (409/404) or the worker is shutting down."""
+        self._settle_progress(state, quiet=True)
         state.final_status = str(payload.get("status") or "failed")
         if not force:
             state.completing = True
@@ -969,13 +1014,23 @@ class TrainerWorker:
     def _run_train(
         self, job: dict[str, Any], state: _JobState, job_dir: Path
     ) -> dict[str, Any]:
+        with recording_setup() as setup:
+            state.setup, state.setup_started = setup, time.monotonic()
+            return self._setup_and_train(job, state, job_dir)
+
+    def _setup_and_train(
+        self, job: dict[str, Any], state: _JobState, job_dir: Path
+    ) -> dict[str, Any]:
         run = job.get("run") or {}
         state.step = int((job.get("resume") or {}).get("step") or 0)
         self._phase(state, "loading_model")
         try:
-            records = self._load_dataset(job, job_dir)
-            resume = self._load_resume(job, job_dir)
-            base = self._load_base(job, job_dir)
+            with setup_step("dataset"):
+                records = self._load_dataset(job, job_dir)
+            with setup_step("resume"):
+                resume = self._load_resume(job, job_dir)
+            with setup_step("base_artifact"):
+                base = self._load_base(job, job_dir)
             runner = self.recipe_runner_factory(str(run["recipe_kind"]))
         except (LeaseLost, WorkerAuthError):
             raise
@@ -994,6 +1049,7 @@ class TrainerWorker:
         try:
             return self._train(job, run, state, job_dir, records, resume, base, runner, trackers)
         finally:
+            self._settle_progress(state, quiet=True)  # its trackers.log goes before finish
             trackers.finish(state.final_status)
 
     def _train(
@@ -1010,6 +1066,8 @@ class TrainerWorker:
     ) -> dict[str, Any]:
         def on_step(metric: dict[str, Any]) -> bool | str:
             now = time.monotonic()
+            if state.setup is not None:
+                self._report_setup(state, now)
             if state.last_step_at is not None:
                 took = now - state.last_step_at
                 state.step_seconds = took if state.step_seconds is None else 0.7 * state.step_seconds + 0.3 * took

@@ -10,9 +10,10 @@ when it is installed and a GPU is present, else from torch's allocator.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 PHASES = (
     "idle",
@@ -31,6 +32,54 @@ _SLOW_BUCKETS = (0.5, 1, 5, 15, 30, 60, 120, 300, 600, 1800)
 
 
 _NVML: list[Any] = []  # [module or None] once probed
+
+#: Setup steps a job's report names, in this order (anything else is "other").
+SETUP_STEPS = {
+    "dataset": "dataset download",
+    "resume": "checkpoint download",
+    "base_artifact": "starting adapter download",
+    "model_download": "model download",
+    "model_load": "loading the weights",
+    "tokenize": "tokenizing",
+    "adapter": "adapter setup",
+    "reference": "scoring the reference",
+    "first_step": "first step",
+}
+
+_SETUP = threading.local()
+
+
+@contextlib.contextmanager
+def setup_step(name: str) -> Iterator[None]:
+    """Times one step of a job's setup (``SETUP_STEPS``) into the thread's
+    ``recording_setup``; a no-op outside one (tests, tools)."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        steps = getattr(_SETUP, "steps", None)
+        if steps is not None:
+            steps[name] = steps.get(name, 0.0) + time.monotonic() - started
+
+
+@contextlib.contextmanager
+def recording_setup() -> Iterator[dict[str, float]]:
+    """Collects the ``setup_step`` seconds of the job running on this thread."""
+    steps: dict[str, float] = {}
+    _SETUP.steps = steps
+    try:
+        yield steps
+    finally:
+        _SETUP.steps = None
+
+
+def setup_summary(total_s: float, steps: dict[str, float]) -> str:
+    """``Ready to train in 41 s: model download 20.1 s, ...`` (steps of at least 0.1 s)."""
+    parts = [(SETUP_STEPS[k], v) for k, v in steps.items() if k in SETUP_STEPS]
+    parts.sort(key=lambda p: list(SETUP_STEPS.values()).index(p[0]))
+    other = total_s - sum(v for _, v in parts)
+    shown = [f"{label} {v:.1f} s" for label, v in parts + [("other", other)] if v >= 0.1]
+    return f"Ready to train in {total_s:.1f} s" + (f": {', '.join(shown)}" if shown else "")
 
 
 def _nvml() -> Any | None:
@@ -141,6 +190,13 @@ class WorkerTelemetry:
             self._prom["upload_bytes"].labels(kind=kind).inc(size_bytes)
             self._prom["upload_seconds"].labels(kind=kind).observe(seconds)
 
+    def observe_setup(self, steps: dict[str, float]) -> None:
+        """A job's setup, up to its first training step (``SETUP_STEPS`` plus ``total``)."""
+        if self._prom:
+            for step, seconds in steps.items():
+                if step in SETUP_STEPS or step == "total":
+                    self._prom["setup_seconds"].labels(step=step).observe(seconds)
+
     def observe_job(self, kind: str, status: str) -> None:
         if self._prom:
             self._prom["jobs"].labels(kind=kind, status=status).inc()
@@ -228,6 +284,14 @@ class WorkerTelemetry:
                 "grad_trainer_upload_duration_seconds",
                 "Upload time, by kind (checkpoint, artifact).",
                 ["kind"],
+                buckets=_SLOW_BUCKETS,
+                registry=registry,
+            ),
+            "setup_seconds": prom.Histogram(
+                "grad_trainer_setup_duration_seconds",
+                "A train job's setup up to its first step, by step (dataset, resume, base_artifact, "
+                "model_download, model_load, tokenize, adapter, reference, first_step, total).",
+                ["step"],
                 buckets=_SLOW_BUCKETS,
                 registry=registry,
             ),

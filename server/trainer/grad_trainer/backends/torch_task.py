@@ -12,6 +12,7 @@ from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
 from ..models import ResolvedModel, describe_model, resolve_model
 from ..runner_types import BaseArtifact
+from ..telemetry import setup_step
 from ..templates import RenderedChat, TokenizedExample, render_chat, tokenize_rendered, tokenize_rendered_batch
 from . import torch_common as tc
 
@@ -35,7 +36,8 @@ class TorchTask:
 
     # -- model setup ----------------------------------------------------------------------
     def resolve(self, model_id: str, family: str) -> ResolvedModel:
-        resolved = resolve_model(model_id)
+        with setup_step("model_download"):
+            resolved = resolve_model(model_id)
         if resolved.family != family:
             raise RecipeConfigError(
                 f"Model '{model_id}' is a {resolved.family} model; the {self.kind} recipe needs a {family} model."
@@ -44,7 +46,8 @@ class TorchTask:
 
     def load_lm(self, resolved: ResolvedModel, *, packed: bool = False) -> Any:
         """Load the causal LM this task trains, and size micro-batches for it."""
-        model = tc.load_causal_lm(resolved, self.device, packed=packed)
+        with setup_step("model_load"):
+            model = tc.load_causal_lm(resolved, self.device, packed=packed)
         if self.spec.micro_batch_tokens is None:
             self.micro_batch_tokens = tc.default_micro_batch_tokens(model)
         return model
@@ -61,9 +64,10 @@ class TorchTask:
         """A trainable LoRA model: fresh, or the starting artifact's adapter (continued training)."""
         torch.manual_seed(self.spec.seed)
         checkpointing = tc.use_gradient_checkpointing(self.spec, self.device)
-        if base is None:
-            return tc.apply_lora(base_lm, self.spec.adapter, checkpointing), tc.lora_settings(self.spec.adapter)
-        return tc.load_lora(base_lm, base.directory, self.spec.adapter, resolved, checkpointing)
+        with setup_step("adapter"):
+            if base is None:
+                return tc.apply_lora(base_lm, self.spec.adapter, checkpointing), tc.lora_settings(self.spec.adapter)
+            return tc.load_lora(base_lm, base.directory, self.spec.adapter, resolved, checkpointing)
 
     def template_revision(self, resolved: ResolvedModel) -> str:
         return str(self.spec.template_revision or resolved.template_revision)

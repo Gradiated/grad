@@ -22,6 +22,7 @@ from ..backends.torch_task import TorchTask
 from ..config import TrainSpec
 from ..errors import RecipeDataError
 from ..runner_types import BaseArtifact
+from ..telemetry import setup_step
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .data import record_id, record_messages
@@ -56,8 +57,9 @@ class SFTTask(TorchTask):
         self.max_len = tc.model_max_len(base_lm, spec)
         self.varlen = base_lm.config._attn_implementation == tc.VARLEN_ATTENTION
         self.stats = {"skipped_no_messages": 0, "skipped_no_trained_tokens": 0, "truncated": 0}
-        self.train_examples = self._encode(train)
-        self.eval_examples = self._encode(held_out)
+        with setup_step("tokenize"):
+            self.train_examples = self._encode(train)
+            self.eval_examples = self._encode(held_out)
         if not self.train_examples:
             raise RecipeDataError("SFT needs at least one training record with a trained assistant turn.")
         self.model, self.lora = self.lora_model(base_lm, self.resolved, base)

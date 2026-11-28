@@ -45,8 +45,9 @@ class FakeProtocolServer:
     progress_reply: Callable[[int], dict[str, Any]] | None = None
     heartbeat_reply: Callable[[int], tuple[int, dict[str, Any]]] | None = None
     checkpoint_status: int = 201
-    # Seconds each storage PUT takes (a slow upload).
+    # Seconds each storage PUT takes (a slow upload), and each /progress (a distant server).
     put_delay_s: float = 0.0
+    progress_delay_s: float = 0.0
     upload_origin: str | None = None
     redirect_claim_to: str | None = None
     # Blob GETs cut short: {path: n} sends the full Content-Length but only half the body,
@@ -232,6 +233,7 @@ class FakeProtocolServer:
                 None,
             )
         if action == "progress":
+            time.sleep(self.progress_delay_s)
             n = len(self.calls("progress"))
             reply = self.progress_reply(n) if self.progress_reply else {}
             return (

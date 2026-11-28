@@ -11,6 +11,7 @@ import os
 import signal
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -243,20 +244,40 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("sha256", failed["error"])
 
     def test_cancel_from_progress_completes_cancelled_without_upload(self) -> None:
-        srv = self.server(
-            jobs=[train_job()],
-            progress_reply=lambda n: {
-                "should_stop": n >= 2,
-                "stop_reason": "cancelled",
-                "status": "cancelled",
-            },
-        )
-        self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
-        complete = srv.bodies("complete")[0]
-        self.assertEqual(complete["status"], "cancelled")
-        self.assertNotIn("upload_id", complete)
-        self.assertEqual(complete["tokens_processed"], 200)
-        self.assertEqual(srv.bodies("uploads"), [])
+        # Short steps report in the background: the second step's answer (stop) lands
+        # while the third trains. Long steps wait for it and stop right after the second.
+        for max_step_s, steps in ((10.0, 3), (0.0, 2)):
+            with self.subTest(background_report_max_step_s=max_step_s):
+                srv = self.server(
+                    jobs=[train_job()],
+                    progress_reply=lambda n: {
+                        "should_stop": n >= 2,
+                        "stop_reason": "cancelled",
+                        "status": "cancelled",
+                    },
+                )
+                worker = self.worker(srv, StubRunner(checkpoint_at=None))
+                worker.background_report_max_step_s = max_step_s
+                worker.run_once()
+                complete = srv.bodies("complete")[0]
+                self.assertEqual(complete["status"], "cancelled")
+                self.assertNotIn("upload_id", complete)
+                self.assertEqual(complete["tokens_processed"], 100 * steps)
+                self.assertEqual(len(srv.bodies("progress")), steps)  # every report is in before /complete
+                self.assertEqual(srv.bodies("uploads"), [])
+
+    def test_background_step_reports_do_not_hold_up_training(self) -> None:
+        srv = self.server(jobs=[train_job()], progress_delay_s=0.3)
+        runner = StubRunner(checkpoint_at=None, steps=6, step_sleep=0.3)
+        started = time.monotonic()
+        self.worker(srv, runner).run_once()
+        took = time.monotonic() - started
+        self.assertEqual([b["metric"]["step"] for b in srv.bodies("progress")], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(srv.bodies("complete")[0]["status"], "completed")
+        # In order, one at a time, each sent while the next step trains: about 6 x 0.3 s of
+        # steps plus the first report (no step time yet) and the last (before /complete),
+        # instead of 6 x (0.3 + 0.3) s in line.
+        self.assertLess(took, 6 * 0.6 - 0.4)
 
     def test_budget_stop_maps_to_stopped_budget_and_uploads(self) -> None:
         for reason in ("budget", "insufficient_balance"):
@@ -328,8 +349,9 @@ class WorkerProtocolTests(unittest.TestCase):
         events = srv.bodies("events")
         phases = [e["phase"] for e in events if e["type"] == "phase"]
         self.assertEqual(phases, ["loading_model", "training", "checkpointing"])
-        log = [e for e in events if e["type"] == "log"][0]
-        self.assertIn(f"saving a checkpoint at step {progress[-1]}", log["message"])
+        logs = [e["message"] for e in events if e["type"] == "log"]
+        self.assertTrue(logs[0].startswith("Ready to train in "), logs)
+        self.assertIn(f"saving a checkpoint at step {progress[-1]}", logs[1])
         self.assertNotIn("spot", json.dumps(events).lower())
         self.assertNotIn("preempt", json.dumps(events).lower())
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 import urllib.request
 from typing import Any
@@ -105,6 +106,32 @@ class WorkerTelemetryTests(unittest.TestCase):
             "process_cpu_seconds_total",
         ):
             self.assertIn(line, text)
+
+
+class SetupTimingTests(unittest.TestCase):
+    def test_setup_steps_are_recorded_only_inside_a_recording(self) -> None:
+        with telemetry_mod.setup_step("model_load"):
+            pass  # outside a recording: nothing to record into, no error
+        with telemetry_mod.recording_setup() as steps:
+            with telemetry_mod.setup_step("model_load"):
+                time.sleep(0.01)
+            with telemetry_mod.setup_step("model_load"):  # a retry adds up
+                pass
+            with self.assertRaises(ValueError), telemetry_mod.setup_step("tokenize"):
+                raise ValueError("timed even when it fails")
+        self.assertEqual(sorted(steps), ["model_load", "tokenize"])
+        self.assertGreaterEqual(steps["model_load"], 0.01)
+
+    def test_summary_names_the_steps_in_order_and_the_rest_as_other(self) -> None:
+        summary = telemetry_mod.setup_summary(
+            41.0, {"tokenize": 3.04, "model_download": 20.0, "model_load": 12.0, "dataset": 0.04, "first_step": 2.0}
+        )
+        self.assertEqual(
+            summary,
+            "Ready to train in 41.0 s: model download 20.0 s, loading the weights 12.0 s, "
+            "tokenizing 3.0 s, first step 2.0 s, other 3.9 s",
+        )
+        self.assertEqual(telemetry_mod.setup_summary(0.02, {}), "Ready to train in 0.0 s")
 
 
 class WorkerIntegrationTests(unittest.TestCase):
