@@ -17,6 +17,7 @@ import { notFound } from "../errors.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
+import { attachmentDisposition } from "../storage/types.js";
 import {
   defaultErrors,
   IdParamSchema,
@@ -26,6 +27,10 @@ import {
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
+
+/** What a downloaded bundle is called: `support-router-2026-11-27-1.grad.tar.gz`. */
+const bundleFilename = (a: { name: string; version: string }): string =>
+  `${a.name}-${a.version}.grad.tar.gz`;
 
 const jsonBody = <T extends z.ZodType>(schema: T) => ({
   body: { required: true, content: { "application/json": { schema } } },
@@ -121,22 +126,21 @@ export const registerArtifactRoutes = (
         c.req.valid("param").id,
       );
       const seconds = 900;
+      const filename = bundleFilename(artifact);
 
       return c.json(
         {
           url: await deps.storage.presignDownload(
             artifact.storage_key,
             seconds,
-            {
-              forClient: true,
-            },
+            { forClient: true, filename },
           ),
           expires_at: new Date(
             deps.clock.now().getTime() + seconds * 1000,
           ).toISOString(),
           sha256: artifact.sha256,
           size_bytes: artifact.size_bytes,
-          filename: `${artifact.name}-${artifact.version}.grad.tar.gz`,
+          filename,
         },
         200,
         { "Cache-Control": "no-store" },
@@ -179,7 +183,9 @@ export const registerArtifactRoutes = (
           "Content-Length": String(artifact.size_bytes),
           "X-Content-Type-Options": "nosniff",
           "X-Artifact-Sha256": artifact.sha256,
-          "Content-Disposition": `attachment; filename="${artifact.name}-${artifact.version}.grad.tar.gz"`,
+          "Content-Disposition": attachmentDisposition(
+            bundleFilename(artifact),
+          ),
         },
       });
     },

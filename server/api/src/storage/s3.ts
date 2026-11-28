@@ -13,6 +13,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import {
+  attachmentDisposition,
   ObjectExistsError,
   ObjectIntegrityError,
   ObjectNotFoundError,
@@ -395,13 +396,20 @@ export class S3ObjectStore implements ObjectStore {
   presignDownload = async (
     key: string,
     expiresInSeconds: number,
-    options: { forClient?: boolean } = {},
+    options: { forClient?: boolean; filename?: string } = {},
   ): Promise<string> =>
     getSignedUrl(
       options.forClient ? this.publicClient : this.client,
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: validateObjectKey(key),
+        ...(options.filename
+          ? {
+              ResponseContentDisposition: attachmentDisposition(
+                options.filename,
+              ),
+            }
+          : {}),
       }),
       { expiresIn: expiresInSeconds },
     );

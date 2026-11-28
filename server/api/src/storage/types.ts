@@ -95,13 +95,31 @@ export interface ObjectStore {
     key: string,
     input: PresignUploadInput,
   ): Promise<PresignedUpload>;
-  /** Presigned GET (for workers; `forClient`: signed for S3_PUBLIC_ENDPOINT). */
+  /**
+   * Presigned GET (for workers; `forClient`: signed for S3_PUBLIC_ENDPOINT).
+   * `filename`: the store answers `Content-Disposition: attachment` with it, so a
+   * browser saves the object under that name instead of its storage key.
+   */
   presignDownload(
     key: string,
     expiresInSeconds: number,
-    options?: { forClient?: boolean },
+    options?: { forClient?: boolean; filename?: string },
   ): Promise<string>;
 }
+
+/**
+ * `attachment; filename="…"; filename*=UTF-8''…` (RFC 6266): an ASCII fallback with
+ * quotes, backslashes and controls replaced, plus the exact name percent-encoded.
+ */
+export const attachmentDisposition = (filename: string): string => {
+  const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  const exact = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${exact}`;
+};
 
 export const validateObjectKey = (key: string): string => {
   if (

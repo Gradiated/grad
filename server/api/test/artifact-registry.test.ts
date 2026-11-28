@@ -103,6 +103,21 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
     expect((await t.deps.storage.head(row!.storage_key))?.sha256).toBe(
       artifact.sha256,
     );
+
+    // A browser following the presigned link saves the bundle under its name.
+    const link = await t.json<{ url: string; filename: string }>(
+      `/v1/artifacts/${artifact.id}/download-url`,
+    );
+    const filename = `${artifact.name}-${artifact.version}.grad.tar.gz`;
+    expect(link.body.filename).toBe(filename);
+    const res = await fetch(link.body.url);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe(
+      `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
+    );
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe(
+      "trained-bundle",
+    );
   });
 
   it("reads releases written before provenance as source=run", async () => {

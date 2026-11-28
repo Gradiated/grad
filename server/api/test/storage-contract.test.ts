@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { S3ObjectStore } from "../src/storage/s3.js";
 import {
+  attachmentDisposition,
   ObjectExistsError,
   ObjectIntegrityError,
   ObjectNotFoundError,
@@ -299,6 +300,25 @@ describe("S3ObjectStore presigned URLs (SeaweedFS)", () => {
     const res = await fetch(download);
     expect(res.status).toBe(200);
     expect(Buffer.compare(Buffer.from(await res.arrayBuffer()), data)).toBe(0);
+    expect(res.headers.get("content-disposition")).toBeNull();
+
+    // A browser download is saved under the bundle's name, not the storage key.
+    const named = await fetch(
+      await store.presignDownload(key, 300, {
+        filename: "support-router-2026-11-27-1.grad.tar.gz",
+      }),
+    );
+    expect(named.status).toBe(200);
+    expect(named.headers.get("content-disposition")).toBe(
+      "attachment; filename=\"support-router-2026-11-27-1.grad.tar.gz\"; filename*=UTF-8''support-router-2026-11-27-1.grad.tar.gz",
+    );
+    await named.arrayBuffer();
+  });
+
+  it("quotes a download filename safely", () => {
+    expect(attachmentDisposition('a"b\\c\nd é.tgz')).toBe(
+      "attachment; filename=\"a_b_c_d _.tgz\"; filename*=UTF-8''a%22b%5Cc%0Ad%20%C3%A9.tgz",
+    );
   });
 
   it("expires presigned downloads", async () => {
