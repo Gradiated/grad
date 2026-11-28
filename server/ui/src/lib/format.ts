@@ -75,13 +75,12 @@ export const ago = (iso: string | null | undefined, now = Date.now()): string =>
   return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: new Date(t).getFullYear() === new Date(now).getFullYear() ? undefined : "numeric" });
 };
 
-/** "Nov 28, 10:14:49" in the browser's zone, or "Nov 28, 10:14:49 UTC" with `utc`. */
+/** "Nov 28, 10:14:49 GMT+1" in the browser's zone, or "Nov 28, 10:14:49 UTC" with `utc`: a time always says its zone. */
 export const dateTime = (iso: string | null | undefined, opts: { utc?: boolean } = {}): string => {
   if (!iso) return "—";
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return "—";
-  const s = t.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, ...(opts.utc ? { timeZone: "UTC" } : {}) });
-  return opts.utc ? `${s} UTC` : s;
+  return t.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZoneName: "short", ...(opts.utc ? { timeZone: "UTC" } : {}) });
 };
 
 export const time = (iso: string | null | undefined): string => {

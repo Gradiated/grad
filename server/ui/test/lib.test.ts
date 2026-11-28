@@ -57,6 +57,7 @@ describe("format", () => {
   it("formats money, numbers, sizes and durations", () => {
     expect(plural(1, "step")).toBe("1 step");
     expect(dateTime("2026-11-28T23:30:05Z", { utc: true })).toBe("Nov 28, 23:30:05 UTC");
+    expect(dateTime("2026-11-28T23:30:05Z")).toMatch(/^Nov (28|29), \d\d:30:05 (UTC|GMT[+-]?\d*|[A-Z]{2,5})$/);
     expect(plural(1000, "step")).toBe("1,000 steps");
     expect(usd(0)).toBe("$0.00");
     expect(usd(0.0034)).toBe("$0.0034");
