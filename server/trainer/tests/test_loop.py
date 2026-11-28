@@ -113,6 +113,8 @@ class LoopTests(TempDirCase):
         self.assertEqual(a.seen, b.seen)
         self.assertEqual(sorted(i for batch in a.seen[:4] for i in batch), list(range(8)))
         self.assertNotEqual(epoch_order(8, 42, 0), epoch_order(8, 42, 1))
+        # Pinned: a checkpoint resumes by replaying this order, so it must never change.
+        self.assertEqual(epoch_order(10, 42, 0).tolist(), [4, 1, 8, 7, 6, 9, 0, 3, 2, 5])
         # Every 10% of steps, at least every 20 steps (and every 5 minutes, see below).
         self.assertEqual(default_checkpoint_every(1000), 20)
         self.assertEqual(default_checkpoint_every(100), 10)

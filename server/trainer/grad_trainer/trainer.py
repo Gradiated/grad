@@ -29,6 +29,7 @@ must behave the same for every recipe:
 
 from __future__ import annotations
 
+import array
 import json
 import math
 import os
@@ -122,8 +123,10 @@ def default_eval_every(total_steps: int) -> int:
     return max(1, min(total_steps, max(20, math.ceil(total_steps * 0.25))))
 
 
-def epoch_order(n: int, seed: int, epoch: int) -> list[int]:
-    order = list(range(n))
+def epoch_order(n: int, seed: int, epoch: int) -> array.array[int]:
+    """Epoch ``epoch``'s permutation of the train items: an int64 array (8 bytes an item, where
+    a list of ints takes about 36); the same permutation a list would get."""
+    order = array.array("q", range(n))
     random.Random(f"grad-epoch:{seed}:{epoch}").shuffle(order)
     return order
 
@@ -174,7 +177,7 @@ class TrainingLoop:
         self._writer: threading.Thread | None = None
         self._writer_queue: queue.Queue[Any] = queue.Queue(maxsize=1)
         self._writer_error: BaseException | None = None
-        self._order_cache: tuple[int, list[int]] | None = None
+        self._order_cache: tuple[int, array.array[int]] | None = None
 
     # -- data ---------------------------------------------------------------------------
     def batch_indices(self, step: int) -> list[int]:
@@ -182,7 +185,7 @@ class TrainingLoop:
         if self._order_cache is None or self._order_cache[0] != epoch:
             self._order_cache = (epoch, epoch_order(self.n_items, self.spec.seed, epoch))
         order = self._order_cache[1]
-        return order[b * self.spec.batch_size : (b + 1) * self.spec.batch_size]
+        return order[b * self.spec.batch_size : (b + 1) * self.spec.batch_size].tolist()
 
     # -- state --------------------------------------------------------------------------
     def _loop_state(self) -> dict[str, Any]:
