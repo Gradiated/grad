@@ -30,7 +30,10 @@ Langfuse, its tiny LoRA for uploads) are skipped.
 checkout's SDK (tsc with sdks/typescript's node_modules, `go build`, `cargo check`). A block may
 continue an earlier one on its page (`dataset` from the block above), so each is compiled after
 the page's earlier blocks of its language, and only errors inside the block itself count.
-Blocks that import another vendor's SDK are skipped.
+Blocks that import another vendor's SDK are skipped. It also checks the API reference's request
+samples (components/docs/training/api-samples.md next to DOCS, or that file as --docs), each on
+its own: TypeScript, Go and Rust as above, Python with mypy against the SDK (attribute names
+included), and CLI commands with grad's own argument parser (--grad-bin; nothing reaches a server).
 
     python3 scripts/check-docs-snippets.py --docs DOCS --api-examples   # the API reference's requests
 
@@ -563,9 +566,33 @@ def compile_blocks(docs: Path) -> list[dict]:
     return out
 
 
+SAMPLE_LANGS = {"python": "python", "ts": "ts", "go": "go", "rust": "rust", "bash": "cli"}
+
+
+def sample_blocks(path: Path) -> list[dict]:
+    """The API reference's request samples: one standalone block per `## operationId` and language."""
+    out, op = [], None
+    lines = path.read_text().split("\n")
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("## "):
+            op = lines[i][3:].strip()
+        m = re.match(r"^```(\w+)$", lines[i])
+        if m and op and m.group(1) in SAMPLE_LANGS:
+            j = next(k for k in range(i + 1, len(lines)) if lines[k].startswith("```"))
+            code = "\n".join(lines[i + 1 : j]) + "\n"
+            out.append({"page": f"{path.name}#{op}", "line": i + 1, "lang": SAMPLE_LANGS[m.group(1)], "code": code,
+                        "skip": None, "prior": [], "standalone": True})
+            i = j
+        i += 1
+    return out
+
+
 def _ts_source(block: dict) -> tuple[str, int, int]:
     """A module: the block's imports on top, then one async function running the page's earlier
     blocks and this one. Returns the source and the line range of this block."""
+    if block.get("standalone"):  # a whole module (top-level await)
+        return block["code"], 1, block["code"].count("\n")
     imports, body = [], []
     for code in [*block["prior"], block["code"]]:
         keep = []
@@ -590,6 +617,11 @@ def _go_source(block: dict) -> tuple[str, int, int]:
     codes = [*block["prior"], block["code"]]
     text = "".join(codes)
     pkgs = sorted({GO_IMPORTS[p] for p in re.findall(r"\b(" + "|".join(GO_IMPORTS) + r")\.[A-Z]", text)} | {"context"})
+    if block.get("standalone"):  # the body of main, which sets up its own ctx and client
+        head = ["package main", "", "import (", *[f'\t"{p}"' for p in pkgs], '\tgrad "github.com/Gradiated/grad/sdks/go"', ")", "",
+                "func main() {"]
+        lines = [*head, *block["code"].rstrip("\n").split("\n"), "}"]
+        return "\n".join(lines) + "\n", 1, len(lines)
     head = ["package main", "", "import (", *[f'\t"{p}"' for p in pkgs], '\tgrad "github.com/Gradiated/grad/sdks/go"', ")", "",
             "func main() { _ = block() }", "", "func block() error {", "\tctx := context.Background()", "\tclient := grad.NewClient()",
             "\t_, _ = ctx, client"]
@@ -607,26 +639,71 @@ def _rust_source(block: dict) -> tuple[str, int, int]:
     codes = [*block["prior"], block["code"]]
     uses = [l for c in codes for l in c.split("\n") if l.startswith("use ")]
     head = ["#![allow(unused)]", *dict.fromkeys(uses), "", "async fn block() -> Result<(), Box<dyn std::error::Error>> {",
-            "    let client = grad::Client::new();"]
+            *([] if block.get("standalone") else ["    let client = grad::Client::new();"])]
     lines = list(head)
     for code in codes[:-1]:
         lines += [l for l in code.rstrip("\n").split("\n") if not l.startswith("use ")]
-    start = len(lines) + 1
+    start = 1 if block.get("standalone") else len(lines) + 1  # a sample's `use` lines count too
     lines += [l for l in codes[-1].rstrip("\n").split("\n") if not l.startswith("use ")]
     end = len(lines)
     lines += ["    Ok(())", "}", "", "fn main() {}"]
     return "\n".join(lines) + "\n", start, end
 
 
-def compile_check(docs: Path, only: str | None) -> int:
-    found = [b for b in compile_blocks(docs) if not only or only in b["page"]]
+# A CLI sample fails only when grad's argument parser (clap) refuses it; with no server to reach,
+# a command it accepts fails later on the connection, a missing file or the empty stdin.
+CLAP_ERROR = re.compile(r"^error: (unexpected argument|invalid value|the following required arguments|unrecognized subcommand|"
+                        r"a value is required|the argument .* cannot be used)", re.M)
+
+
+def _samples_path(docs: Path) -> Path | None:
+    if docs.name == "api-samples.md":
+        return docs
+    if docs.is_dir():
+        path = docs.resolve().parents[1] / "components" / "docs" / "training" / "api-samples.md"
+        return path if path.exists() else None
+    return None
+
+
+def _cli_check(code: str, grad_bin: str, work: Path) -> str | None:
+    """None when grad parses every command of the block, else clap's complaint."""
+    bindir = work / "cli-bin"
+    bindir.mkdir(exist_ok=True)
+    if not (bindir / "grad").exists():
+        (bindir / "grad").symlink_to(Path(grad_bin).resolve())
+    home = work / "cli-home"
+    home.mkdir(exist_ok=True)
+    env = {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}", "HOME": str(home), "XDG_CONFIG_HOME": str(home),
+           "GRADIATED_BASE_URL": "http://127.0.0.1:9", "GRADIATED_API_KEY": "docs-compile-check", "NO_COLOR": "1"}
+    try:
+        p = subprocess.run(["bash", "-c", code], cwd=home, env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "timed out (does it wait for a server?)"
+    m = CLAP_ERROR.search(p.stderr)
+    return p.stderr[m.start():].strip()[:800] if m else None
+
+
+def compile_check(docs: Path, only: str | None, grad_bin: str | None = None) -> int:
+    samples = _samples_path(docs)
+    found = [] if docs.name == "api-samples.md" else compile_blocks(docs)
+    found += sample_blocks(samples) if samples else []
+    found = [b for b in found if not only or only in b["page"]]
     work = Path(tempfile.mkdtemp(prefix="grad-docs-compile-"))
     results = {"pass": 0, "fail": 0, "skip": 0}
-    by_lang: dict[str, list[tuple[int, dict, int, int]]] = {"ts": [], "go": [], "rust": []}
+    by_lang: dict[str, list[tuple[int, dict, int, int]]] = {"ts": [], "go": [], "rust": [], "python": [], "cli": []}
     for n, b in enumerate(found):
+        if b["lang"] == "cli" and not (grad_bin and Path(grad_bin).exists()):
+            b["skip"] = "needs a grad binary (--grad-bin)"
         if b["skip"]:
             results["skip"] += 1
             print(f"SKIP {b['page']}:{b['line']} ({b['lang']}): {b['skip']}", flush=True)
+            continue
+        if b["lang"] in ("python", "cli"):
+            if b["lang"] == "python":
+                f = work / "py" / f"b{n}.py"
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(b["code"])
+            by_lang[b["lang"]].append((n, b, 1, b["code"].count("\n")))
             continue
         src, start, end = {"ts": _ts_source, "go": _go_source, "rust": _rust_source}[b["lang"]](b)
         if b["lang"] == "ts":
@@ -677,13 +754,38 @@ def compile_check(docs: Path, only: str | None) -> int:
         (work / "rust" / "Cargo.toml").write_text(
             '[package]\nname = "docscheck"\nversion = "0.0.0"\nedition = "2021"\npublish = false\n\n[workspace]\n\n'
             f'[dependencies]\ngrad = {{ package = "grad-sdk", path = "{REPO / "sdks" / "rust"}" }}\n'
-            'tokio = { version = "1", features = ["full"] }\n')
+            'serde_json = "1"\ntokio = { version = "1", features = ["full"] }\n')
         target = os.environ.get("CARGO_TARGET_DIR") or str(REPO / "target")
-        p = subprocess.run(["cargo", "check", "--bins", "--offline", "--message-format", "short", "--target-dir", target],
+        p = subprocess.run(["cargo", "check", "--bins", "--keep-going", "--offline", "--message-format", "short", "--target-dir", target],
                            cwd=work / "rust", capture_output=True, text=True)
         check_output("cargo check", p, r"^src/bin/b\d+\.rs:\d+")
         for m in re.finditer(r"^src/bin/b(\d+)\.rs:(\d+):\d+: error[^:]*: (.*)$", p.stderr, re.M):
             keep(int(m.group(1)), int(m.group(2)), m.group(3), RUST_IGNORED)
+    if by_lang["python"]:
+        # mypy against this checkout's SDK: keyword arguments, attribute names and types, like tsc for TypeScript.
+        # A copy of the SDK without APIObject's fallback to raw JSON fields, so a misspelt attribute fails.
+        sdk = work / "py-sdk"
+        shutil.copytree(REPO / "sdks" / "python" / "grad", sdk / "grad")
+        models = sdk / "grad" / "_models.py"
+        text, n_fallback = re.subn(r"\n    def __getattr__\(self, name: str\) -> Any:\n        if name\.startswith\(\"_\"\):\n"
+                                   r"(?:        .*\n)+?        raise AttributeError\(f\"\{type\(self\)\.__name__\} has no attribute.*\n", "\n",
+                                   models.read_text())
+        if n_fallback != 1:
+            raise SystemExit("update check-docs-snippets.py: APIObject.__getattr__ in sdks/python/grad/_models.py changed")
+        models.write_text(text)
+        env = {**os.environ, "MYPYPATH": str(sdk)}
+        p = subprocess.run([sys.executable, "-m", "mypy", "--no-error-summary", "--show-error-codes", "--hide-error-context",
+                            "--no-incremental", "--cache-dir", str(work / "mypy-cache"), "."], cwd=work / "py",
+                           capture_output=True, text=True, env=env)
+        if "No module named mypy" in p.stderr:
+            raise SystemExit("install mypy next to the SDK (`pip install mypy httpx`) to check the Python samples")
+        check_output("mypy", p, r"^b\d+\.py:\d+")
+        for m in re.finditer(r"^b(\d+)\.py:(\d+): error: (.*)$", p.stdout, re.M):
+            keep(int(m.group(1)), int(m.group(2)), m.group(3), ())
+    for n, b, _, _ in by_lang["cli"]:
+        complaint = _cli_check(b["code"], str(grad_bin), work)
+        if complaint:
+            errors.setdefault(n, []).append(complaint)
     for n, b, _, _ in sorted(by_lang_flat, key=lambda x: x[0]):
         where = f"{b['page']}:{b['line']} ({b['lang']})"
         if n in errors:
@@ -839,7 +941,7 @@ def main() -> int:
     ap.add_argument("--capture", type=Path, help="with --api-examples: write every endpoint's recorded response here (the reference's api-responses.json)")
     args = ap.parse_args()
     if args.compile:
-        return compile_check(args.docs, args.only)
+        return compile_check(args.docs, args.only, args.grad_bin)
 
     found = [b for b in blocks(args.docs) if not args.only or args.only in b["page"]]
     if args.list:
