@@ -607,6 +607,125 @@ const resolveStart = (request: PlanRunRequest, context: PlanContext): Start => {
   return start;
 };
 
+/**
+ * What one epoch puts through the model: the train items (records, pairs or
+ * router prompt groups) and their tokens, each sequence capped at
+ * `maxSeqLen` (`truncated` counts the capped ones), and the eval split's.
+ */
+const countTokens = (
+  recipe: PlanRunRequest["recipe"],
+  split: { train: readonly DatasetRecord[]; eval: readonly DatasetRecord[] },
+  renderOptions: RenderOptions,
+  maxSeqLen: number,
+): {
+  trainItems: number;
+  totalTokens: number;
+  trainedTokens: number;
+  truncated: number;
+  evalTokens: number;
+} => {
+  const { train, eval: evalSet } = split;
+  let totalTokens = 0;
+  let trainedTokens = 0;
+  let truncated = 0;
+  let evalTokens = 0;
+  let trainItems = train.length;
+  if (recipe.kind === "router") {
+    // One item per prompt group, prompt tokens only (recipes/router.py).
+    const groups = routerGroups(train, recipe, renderOptions);
+    trainItems = groups.length;
+    totalTokens = groups.reduce((sum, t) => sum + t, 0);
+    trainedTokens = totalTokens;
+    evalTokens = routerGroups(evalSet, recipe, renderOptions).reduce(
+      (sum, t) => sum + t,
+      0,
+    );
+  } else if (recipe.kind === "dpo" || recipe.kind === "reward") {
+    // One item per pair: prompt + chosen and prompt + rejected both go through the model.
+    const pointwise =
+      recipe.kind === "reward" && typeof recipe.rubric === "string"
+        ? recipe.rubric
+        : undefined;
+    const sequenceTokens = (items: ChatMessage[][][]) =>
+      items.map((sequences) =>
+        sequences.map((messages) =>
+          renderMessages("pair", messages, renderOptions),
+        ),
+      );
+    const trainSides = sequenceTokens(preferenceItems(train, pointwise));
+    trainItems = trainSides.length;
+    for (const sides of trainSides) {
+      for (const side of sides) {
+        totalTokens += Math.min(side.total_tokens, maxSeqLen);
+        trainedTokens += Math.min(side.trained_tokens, maxSeqLen);
+        if (side.total_tokens > maxSeqLen) truncated += 1;
+      }
+    }
+    for (const sides of sequenceTokens(preferenceItems(evalSet, pointwise))) {
+      for (const side of sides) {
+        evalTokens += Math.min(side.total_tokens, maxSeqLen);
+      }
+    }
+  } else {
+    for (const record of train) {
+      const counts = estimateRecordTokens(record, renderOptions);
+      totalTokens += Math.min(counts.total, maxSeqLen);
+      trainedTokens += Math.min(counts.trained, maxSeqLen);
+      if (counts.total > maxSeqLen) truncated += 1;
+    }
+    for (const record of evalSet) {
+      evalTokens += Math.min(
+        estimateRecordTokens(record, renderOptions).total,
+        maxSeqLen,
+      );
+    }
+  }
+
+  return { trainItems, totalTokens, trainedTokens, truncated, evalTokens };
+};
+
+/** recipe.lr "auto": the model's calibrated rate for the recipe, scaled by sqrt(batch / calibration batch). */
+const resolveLr = (
+  recipe: PlanRunRequest["recipe"],
+  model: TrainableModel,
+  batchSize: number,
+): { lr: number; lrSource: string } => {
+  if (recipe.lr !== "auto") {
+    return { lr: recipe.lr * recipe.lr_scale, lrSource: "explicit" };
+  }
+  const baseLr = model.calibrated_lrs[recipe.kind] as number;
+  const scale = Math.sqrt(batchSize / CALIBRATED_BATCH_SIZE) * recipe.lr_scale;
+
+  return {
+    lr: Number((baseLr * scale).toPrecision(3)),
+    lrSource: `${AUTO_RULE_VERSION}: calibrated for ${model.id} at batch ${CALIBRATED_BATCH_SIZE}, sqrt batch scaling`,
+  };
+};
+
+/** How often the trainer checkpoints and evaluates the held-out split, in steps. */
+const cadence = (
+  recipe: PlanRunRequest["recipe"],
+  estimatedSteps: number,
+): { checkpointEvery: number; evalEvery: number } => ({
+  // Every 10% of steps and at least every 20 steps; the trainer also
+  // checkpoints every 5 minutes, and uploads in the background.
+  checkpointEvery: Math.max(1, Math.min(20, Math.floor(estimatedSteps * 0.1))),
+  // auto: every 25% of the run, at most every 20 steps
+  // (trainer.default_eval_every). An eval costs far more than a checkpoint,
+  // so it doesn't follow the checkpoints; the trainer checkpoints at every
+  // eval step.
+  evalEvery:
+    recipe.eval_every === "auto"
+      ? Math.max(
+          1,
+          Math.min(
+            estimatedSteps,
+            Math.max(20, Math.ceil(estimatedSteps * 0.25)),
+          ),
+        )
+      : recipe.eval_every,
+});
+
 /** Resolves every default for a run and estimates its cost. Throws ApiError(422). */
 export const planRun = (
   request: PlanRunRequest,
@@ -712,61 +831,8 @@ export const planRun = (
   };
 
   const maxSeqLen = Math.min(model.max_context_tokens, TRAINER_MAX_SEQ_LEN);
-  let totalTokens = 0;
-  let trainedTokens = 0;
-  let truncated = 0;
-  let evalTokens = 0;
-  let trainItems = train.length;
-  if (recipe.kind === "router") {
-    // One item per prompt group, prompt tokens only (recipes/router.py).
-    const groups = routerGroups(train, recipe, renderOptions);
-    trainItems = groups.length;
-    totalTokens = groups.reduce((sum, t) => sum + t, 0);
-    trainedTokens = totalTokens;
-    evalTokens = routerGroups(evalSet, recipe, renderOptions).reduce(
-      (sum, t) => sum + t,
-      0,
-    );
-  } else if (paired) {
-    // One item per pair: prompt + chosen and prompt + rejected both go through the model.
-    const pointwise =
-      recipe.kind === "reward" && typeof recipe.rubric === "string"
-        ? recipe.rubric
-        : undefined;
-    const sequenceTokens = (items: ChatMessage[][][]) =>
-      items.map((sequences) =>
-        sequences.map((messages) =>
-          renderMessages("pair", messages, renderOptions),
-        ),
-      );
-    const trainSides = sequenceTokens(preferenceItems(train, pointwise));
-    trainItems = trainSides.length;
-    for (const sides of trainSides) {
-      for (const side of sides) {
-        totalTokens += Math.min(side.total_tokens, maxSeqLen);
-        trainedTokens += Math.min(side.trained_tokens, maxSeqLen);
-        if (side.total_tokens > maxSeqLen) truncated += 1;
-      }
-    }
-    for (const sides of sequenceTokens(preferenceItems(evalSet, pointwise))) {
-      for (const side of sides) {
-        evalTokens += Math.min(side.total_tokens, maxSeqLen);
-      }
-    }
-  } else {
-    for (const record of train) {
-      const counts = estimateRecordTokens(record, renderOptions);
-      totalTokens += Math.min(counts.total, maxSeqLen);
-      trainedTokens += Math.min(counts.trained, maxSeqLen);
-      if (counts.total > maxSeqLen) truncated += 1;
-    }
-    for (const record of evalSet) {
-      evalTokens += Math.min(
-        estimateRecordTokens(record, renderOptions).total,
-        maxSeqLen,
-      );
-    }
-  }
+  const { trainItems, totalTokens, trainedTokens, truncated, evalTokens } =
+    countTokens(recipe, { train, eval: evalSet }, renderOptions, maxSeqLen);
 
   let distill: DistillPlan | null = null;
   if (recipe.kind === "distill") {
@@ -786,18 +852,7 @@ export const planRun = (
 
   const batchSize =
     recipe.batch_size ?? defaultBatchSize(recipe.kind, trainItems);
-  let lr: number;
-  let lrSource: string;
-  if (recipe.lr === "auto") {
-    const baseLr = model.calibrated_lrs[recipe.kind] as number;
-    const scale =
-      Math.sqrt(batchSize / CALIBRATED_BATCH_SIZE) * recipe.lr_scale;
-    lr = Number((baseLr * scale).toPrecision(3));
-    lrSource = `${AUTO_RULE_VERSION}: calibrated for ${model.id} at batch ${CALIBRATED_BATCH_SIZE}, sqrt batch scaling`;
-  } else {
-    lr = recipe.lr * recipe.lr_scale;
-    lrSource = "explicit";
-  }
+  const { lr, lrSource } = resolveLr(recipe, model, batchSize);
 
   // As the trainer's loop: whole batches per epoch (the last one may be short).
   const stepsPerEpoch = Math.max(1, Math.ceil(trainItems / batchSize));
@@ -849,25 +904,7 @@ export const planRun = (
     );
   }
 
-  // Every 10% of steps and at least every 20 steps; the trainer also checkpoints
-  // every 5 minutes, and uploads in the background.
-  const checkpointEvery = Math.max(
-    1,
-    Math.min(20, Math.floor(estimatedSteps * 0.1)),
-  );
-  // auto: every 25% of the run, at most every 20 steps (trainer.default_eval_every).
-  // An eval costs far more than a checkpoint, so it doesn't follow the checkpoints;
-  // the trainer checkpoints at every eval step.
-  const evalEvery =
-    recipe.eval_every === "auto"
-      ? Math.max(
-          1,
-          Math.min(
-            estimatedSteps,
-            Math.max(20, Math.ceil(estimatedSteps * 0.25)),
-          ),
-        )
-      : recipe.eval_every;
+  const { checkpointEvery, evalEvery } = cadence(recipe, estimatedSteps);
   if (evalEvery > estimatedSteps) {
     warnings.push(
       `eval_every=${evalEvery} is more than the ${estimatedSteps} estimated steps; the held-out split is evaluated only at the end.`,
