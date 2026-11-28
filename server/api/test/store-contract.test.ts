@@ -1149,6 +1149,39 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       ).toBe(1);
       expect(await store.evals.countOutputs(ev.id)).toBe(5);
 
+      // Score rows page in task, model, sample order; an answer means not every call failed.
+      const paged = [];
+      for (let after = null, page; ; after = page.at(-1) ?? null) {
+        page = await store.evals.listScoreRows(ev.id, after, 2);
+        paged.push(...page);
+        if (page.length < 2) break;
+      }
+      expect(
+        paged.map((r) => [r.task_index, r.model, r.sample_index, r.answered]),
+      ).toEqual([
+        [0, "m1", 0, true],
+        [0, "m1", 1, true],
+        [0, "m2", 0, true],
+        [1, "m1", 0, true],
+        [1, "m2", 0, false],
+      ]);
+      expect(await store.evals.everyCallFailed(ev.id)).toBeNull();
+      const allFailed = await makeEval();
+      expect(await store.evals.everyCallFailed(allFailed.id)).toBeNull();
+      await store.evals.insertOutputs(
+        (["second", "first"] as const).map((error, task) =>
+          output("m1", 1 - task, 0, 1, {
+            id: `o_failing_${task}`,
+            eval_id: allFailed.id,
+            output: null,
+            error,
+          }),
+        ),
+      );
+      expect(await store.evals.everyCallFailed(allFailed.id)).toEqual({
+        error: "first",
+      });
+
       expect(await store.evals.listOutputKeys(ev.id)).toEqual(
         new Set([
           "m1\u00000\u00000",

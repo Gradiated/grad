@@ -929,8 +929,17 @@ export interface EvalRepository {
    */
   insertOutputs(outputs: readonly EvalOutputRow[]): Promise<number>;
   countOutputs(evalId: string): Promise<number>;
-  /** Every output's score fields, in task, model, sample order. */
-  listScoreRows(evalId: string): Promise<EvalScoreRow[]>;
+  /**
+   * When the eval has outputs and none has an answer (every model call
+   * failed): the first one's error. Null otherwise.
+   */
+  everyCallFailed(evalId: string): Promise<{ error: string | null } | null>;
+  /** A page of outputs' score fields after `after`, in task, model, sample order. */
+  listScoreRows(
+    evalId: string,
+    after: Pick<EvalScoreRow, "task_index" | "model" | "sample_index"> | null,
+    limit: number,
+  ): Promise<EvalScoreRow[]>;
   /** Keys `${model}\u0000${task_index}\u0000${sample_index}` already generated. */
   listOutputKeys(evalId: string): Promise<Set<string>>;
   /** Ordered by (task_index, model, sample_index). */

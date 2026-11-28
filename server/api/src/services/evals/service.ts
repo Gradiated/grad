@@ -12,6 +12,7 @@ import {
   PlanEvalRequestSchema,
   RECORD_MODEL,
   type CheckpointEvalResult,
+  type DatasetRecord,
   type EvalMode,
   type EvalOutput,
   type EvalRun,
@@ -39,6 +40,7 @@ import { createOnce, type Created } from "../../idempotency.js";
 import { newId } from "../../ids.js";
 import type {
   CheckpointRecord,
+  DatasetPart,
   EvalOutputRow,
   EvalScoreRow,
   EvalRecord,
@@ -69,8 +71,13 @@ import { metrics } from "../../telemetry/metrics.js";
 import { scoreUpdate } from "../record-merge.js";
 import { settleLabelledRuns } from "../router-labels.js";
 import type { UsageService } from "../usage.js";
-import { aggregateEval } from "./aggregate.js";
+import { createEvalAggregator } from "./aggregate.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./planner.js";
+
+/** Outputs' score fields read at a time while an eval completes. */
+const SCORE_ROWS_PAGE = 5_000;
+/** Score updates per dataset part a scoring job writes. */
+const SCORE_PART_RECORDS = 50_000;
 
 export interface EvalService {
   plan(
@@ -298,51 +305,64 @@ export const createEvalService = (
   };
 
   /**
-   * A scoring job's score-update part (one record per scored task, without
-   * scores that failed). Content-addressed, so a retried finalize writes the
-   * same object. Null when nothing was scored.
+   * Aggregates outputs and marks the eval completed; CAS on `expect`.
+   *
+   * Outputs are read a page of score fields at a time (never their records
+   * or answers); each page's combined scores are stored as it goes, and a
+   * scoring job's score updates (one per scored task, without scores that
+   * failed) go to content-addressed parts, so a retried finalize writes the
+   * same rows and objects. Status, usage, the scored version and the
+   * labelled run then commit together, or not at all.
    */
-  const writeScorePart = async (
-    record: EvalRecord,
-    outputs: readonly EvalScoreRow[],
-  ) => {
-    const updates = outputs
-      .filter((o) => o.answered && Object.keys(o.scores).length > 0)
-      .map((o) => scoreUpdate(o.task_id, o.scores));
-    if (updates.length === 0) return null;
-
-    return writeRecordsPart(
-      deps.storage,
-      (sha) => datasetPartKey(record.workspace_id, record.dataset_id, sha),
-      updates,
-    );
-  };
-
-  /** Aggregates outputs and marks the eval completed; CAS on `expect`. */
   const finalize = async (
     record: EvalRecord,
     expect: JobExpectation,
   ): Promise<EvalRecord | null> => {
-    // Score fields only: an eval's records and answers never load at once.
-    const outputs = await store.evals.listScoreRows(record.id);
-    const aggregation = aggregateEval(record, outputs);
-    const scorePart =
-      record.mode === "score" ? await writeScorePart(record, outputs) : null;
-    // Scores, status, usage and the labelled run commit together, or not at all.
+    const aggregator = createEvalAggregator(record);
+    const scoreParts: DatasetPart[] = [];
+    let updates: DatasetRecord[] = [];
+    const flushUpdates = async () => {
+      if (updates.length === 0) return;
+      scoreParts.push(
+        await writeRecordsPart(
+          deps.storage,
+          (sha) => datasetPartKey(record.workspace_id, record.dataset_id, sha),
+          updates,
+        ),
+      );
+      updates = [];
+    };
+    for (let after: EvalScoreRow | null = null; ; ) {
+      const page = await store.evals.listScoreRows(
+        record.id,
+        after,
+        SCORE_ROWS_PAGE,
+      );
+      await store.evals.setCombinedScores(record.id, aggregator.add(page));
+      if (record.mode === "score") {
+        for (const o of page) {
+          if (o.answered && Object.keys(o.scores).length > 0) {
+            updates.push(scoreUpdate(o.task_id, o.scores));
+          }
+        }
+        if (updates.length >= SCORE_PART_RECORDS) await flushUpdates();
+      }
+      if (page.length < SCORE_ROWS_PAGE) break;
+      after = page.at(-1) as EvalScoreRow;
+    }
+    await flushUpdates();
+    const aggregation = aggregator.finish();
+
     return store
       .transaction(async () => {
-        await store.evals.setCombinedScores(
-          record.id,
-          aggregation.outputScores,
-        );
         const scoredVersion =
           record.mode !== "score"
             ? null
-            : scorePart
+            : scoreParts.length > 0
               ? (
                   await store.datasets.appendVersion({
                     datasetId: record.dataset_id,
-                    parts: [scorePart],
+                    parts: scoreParts,
                   })
                 ).version
               : record.dataset_version;
@@ -355,7 +375,7 @@ export const createEvalService = (
             error: null,
             summary: aggregation.summary,
             total_cost_usd: aggregation.totalCostUsd,
-            generated: outputs.length,
+            generated: aggregation.generated,
             finished_at: clock.now().toISOString(),
             scored_dataset_version: scoredVersion,
           },
@@ -573,20 +593,17 @@ export const createEvalService = (
     job: EvalRecord,
     expect: JobExpectation,
   ): Promise<void> => {
-    const outputs = await store.evals.listScoreRows(job.id);
-    if (
-      job.mode === "eval" &&
-      outputs.length > 0 &&
-      outputs.every((o) => !o.answered)
-    ) {
-      const first = outputs[0]?.error;
+    const failed =
+      job.mode === "eval" ? await store.evals.everyCallFailed(job.id) : null;
+    if (failed) {
       await failAttempt(
         job,
         expect,
-        `Every model call failed; first error: ${first ?? "unknown"}`,
+        `Every model call failed; first error: ${failed.error ?? "unknown"}`,
       );
       return;
     }
+    const generated = await store.evals.countOutputs(job.id);
 
     if (job.local_scorers.length > 0) {
       const missing = await store.evals.countMissingScores(
@@ -600,7 +617,7 @@ export const createEvalService = (
             {
               ...RELEASE,
               status: "awaiting_scores",
-              generated: outputs.length,
+              generated,
             },
             expect,
           );
@@ -610,7 +627,7 @@ export const createEvalService = (
       }
     }
 
-    await finalize({ ...job, generated: outputs.length }, expect);
+    await finalize({ ...job, generated }, expect);
   };
 
   /** Fails the eval (false: `expect` no longer held); the status and its bill commit together. */

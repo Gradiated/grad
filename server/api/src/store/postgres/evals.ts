@@ -109,14 +109,38 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
           ),
         )?.n ?? 0,
       ),
-    listScoreRows: async (evalId) =>
+    everyCallFailed: async (evalId) => {
+      // Each EXISTS stops at its first row: an eval with answers reads one or two.
+      const row = first(
+        await db.query(
+          `SELECT EXISTS (SELECT 1 FROM grad_eval_outputs WHERE eval_id = $1) AS any,
+                  EXISTS (SELECT 1 FROM grad_eval_outputs WHERE eval_id = $1
+                          AND output IS NOT NULL) AS answered,
+                  (SELECT error FROM grad_eval_outputs WHERE eval_id = $1
+                   ORDER BY task_index, model COLLATE "C", sample_index LIMIT 1) AS error`,
+          [evalId],
+        ),
+      );
+      if (row?.any !== true || row.answered === true) return null;
+
+      return { error: row.error === null ? null : String(row.error) };
+    },
+    listScoreRows: async (evalId, after, limit) =>
       (
         await db.query(
           `SELECT id, task_index, task_id, model, sample_index, scores, error,
                   prompt_tokens, completion_tokens, cost_usd, output IS NOT NULL AS answered
-           FROM grad_eval_outputs WHERE eval_id = $1
-           ORDER BY task_index, model COLLATE "C", sample_index`,
-          [evalId],
+           FROM grad_eval_outputs
+           WHERE eval_id = $1${
+             after
+               ? ` AND (task_index, model COLLATE "C", sample_index) > ($3::int, $4::text COLLATE "C", $5::int)`
+               : ""
+           }
+           ORDER BY task_index, model COLLATE "C", sample_index
+           LIMIT $2`,
+          after
+            ? [evalId, limit, after.task_index, after.model, after.sample_index]
+            : [evalId, limit],
         )
       ).map((r) => ({
         id: String(r.id),

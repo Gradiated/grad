@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { EvalRubricItemSchema, type EvalRubricItem } from "../src/contracts.js";
-import { aggregateEval } from "../src/services/evals/aggregate.js";
+import { createEvalAggregator } from "../src/services/evals/aggregate.js";
 import {
   createOpenAICompatibleClient,
   inferenceErrorReason,
@@ -572,22 +572,29 @@ describe("aggregation", () => {
       output("tuned", 1, 0, 1),
       output("tuned", 1, 1, null),
     ];
-    const agg = aggregateEval(
-      {
-        id: "eval_1",
-        models: ["base", "tuned"],
-        baseline: "base",
-        rubric,
-        samples: 2,
-        pass_threshold: 1,
-        judge_models: [],
-        model_targets: {
-          base: { inference_model: "base", price_per_million_tokens: 1 },
-          tuned: { inference_model: "tuned", price_per_million_tokens: null },
-        },
+    const run = {
+      id: "eval_1",
+      models: ["base", "tuned"],
+      baseline: "base",
+      rubric,
+      samples: 2,
+      pass_threshold: 1,
+      judge_models: [],
+      model_targets: {
+        base: { inference_model: "base", price_per_million_tokens: 1 },
+        tuned: { inference_model: "tuned", price_per_million_tokens: null },
       },
-      outputs,
+    };
+    // listScoreRows order: task, model, sample.
+    outputs.sort(
+      (a, b) =>
+        a.task_index - b.task_index ||
+        a.model.localeCompare(b.model) ||
+        a.sample_index - b.sample_index,
     );
+    const aggregator = createEvalAggregator(run);
+    const outputScores = aggregator.add(outputs);
+    const agg = { ...aggregator.finish(), outputScores };
     const [base, tuned] = agg.summary;
     expect(base?.overall).toBe(0.25);
     expect(base?.pass_at_k["pass@1"]).toBe(0.25);
@@ -603,5 +610,16 @@ describe("aggregation", () => {
     expect(agg.outputScores.find((o) => o.id === "o_tuned_1_1")?.score).toBe(0);
     expect(agg.outputScores.find((o) => o.id === "o_base_0_1")?.score).toBe(1);
     expect(agg.totalCostUsd).toBeCloseTo(0.008, 6);
+    expect(agg.generated).toBe(8);
+
+    // Pages that split a task's outputs aggregate exactly like one page.
+    for (const size of [1, 3, 5]) {
+      const paged = createEvalAggregator(run);
+      const scores = [];
+      for (let at = 0; at < outputs.length; at += size) {
+        scores.push(...paged.add(outputs.slice(at, at + size)));
+      }
+      expect({ ...paged.finish(), outputScores: scores }).toEqual(agg);
+    }
   });
 });
