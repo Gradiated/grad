@@ -1,0 +1,98 @@
+# promtool unit tests for the chart's alerts (tests/helm/alerts.sh renders
+# them for release g in namespace t). Gauges read from Postgres are the same
+# on every API replica, so several tests report them from two pods.
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  # Train jobs queued (seen by both replicas), no train worker online: one alert, not one per replica.
+  - interval: 1m
+    input_series:
+      - series: 'grad_jobs{namespace="t", service="g-grad-api", pod="a", kind="train", status="queued"}'
+        values: '2x30'
+      - series: 'grad_jobs{namespace="t", service="g-grad-api", pod="b", kind="train", status="queued"}'
+        values: '2x30'
+      - series: 'grad_workers_online{namespace="t", service="g-grad-api", pod="a", kind="import"}'
+        values: '1x30'
+      - series: 'grad_maintenance_last_tick_timestamp_seconds{namespace="t", service="g-grad-api", pod="a"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GradNoWorkersForQueuedJobs
+      - eval_time: 20m
+        alertname: GradNoWorkersForQueuedJobs
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: train}
+            exp_annotations:
+              summary: train jobs are queued and no train worker has been online for 15 minutes.
+              description: The train worker pool is scaled to zero or can't start or authenticate (image, GPU quota, worker token; see grad_worker_auth_total).
+              runbook_url: https://github.com/Gradiated/grad/blob/v@APP_VERSION@/docs/SELF_HOSTING.md#gradnoworkersforqueuedjobs
+      - eval_time: 20m
+        alertname: GradMaintenanceStalled
+
+  # A train worker online: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'grad_jobs{namespace="t", service="g-grad-api", pod="a", kind="train", status="queued"}'
+        values: '2x30'
+      - series: 'grad_workers_online{namespace="t", service="g-grad-api", pod="a", kind="train"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GradNoWorkersForQueuedJobs
+
+  # 4 of 10 train jobs failed within 30 minutes: the summary shows the share, not the count.
+  - interval: 1m
+    input_series:
+      - series: 'grad_job_failures_total{namespace="t", service="g-grad-api", pod="a", kind="train", recipe_kind="sft", error_code="job_error"}'
+        values: '0 0 0 0 0 1 1 2 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'grad_job_duration_seconds_count{namespace="t", service="g-grad-api", pod="a", kind="train", recipe_kind="sft", status="failed"}'
+        values: '0 0 0 0 0 1 1 2 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'grad_job_duration_seconds_count{namespace="t", service="g-grad-api", pod="a", kind="train", recipe_kind="sft", status="completed"}'
+        values: '0 1 2 3 4 5 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: GradJobFailureRateHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: train}
+            exp_annotations:
+              summary: 40% of train jobs failed in the last 30 minutes.
+              description: grad_job_failures_total's error_code says why (attempts_exhausted, preemptions_exhausted, invalid_artifact, source_unavailable, job_error); the worker logs carry the stack, keyed by job_id.
+              runbook_url: https://github.com/Gradiated/grad/blob/v@APP_VERSION@/docs/SELF_HOSTING.md#gradjobfailureratehigh
+
+  # 2 failures of 2 jobs: below failureMinJobs (3), quiet.
+  - interval: 1m
+    input_series:
+      - series: 'grad_job_failures_total{namespace="t", service="g-grad-api", pod="a", kind="import", recipe_kind="", error_code="job_error"}'
+        values: '0 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+      - series: 'grad_job_duration_seconds_count{namespace="t", service="g-grad-api", pod="a", kind="import", recipe_kind="", status="failed"}'
+        values: '0 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: GradJobFailureRateHigh
+
+  # 10% of requests fail with 5xx at 2 req/s: fires; the maintenance tick stopped advancing: fires.
+  - interval: 1m
+    input_series:
+      - series: 'grad_http_requests_total{namespace="t", service="g-grad-api", pod="a", route="/v1/runs", method="GET", status_class="2xx"}'
+        values: '0+108x30'
+      - series: 'grad_http_requests_total{namespace="t", service="g-grad-api", pod="a", route="/v1/runs", method="GET", status_class="5xx"}'
+        values: '0+12x30'
+      - series: 'grad_maintenance_last_tick_timestamp_seconds{namespace="t", service="g-grad-api", pod="a"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GradApiErrorRateHigh
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: grad-server answers 10% of requests with a 5xx.
+              description: Check `kubectl logs` of the API pods (5xx lines carry request_id and trace_id), the database and object storage.
+              runbook_url: https://github.com/Gradiated/grad/blob/v@APP_VERSION@/docs/SELF_HOSTING.md#gradapierrorratehigh
+      - eval_time: 20m
+        alertname: GradMaintenanceStalled
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: grad-server's maintenance loop has not finished a tick for 20m 0s.
+              description: Lease expiry, requeues, source syncs, usage pushes and the queue gauges (and KEDA) are stale. Check the API pods and the database.
+              runbook_url: https://github.com/Gradiated/grad/blob/v@APP_VERSION@/docs/SELF_HOSTING.md#gradmaintenancestalled

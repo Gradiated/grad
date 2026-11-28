@@ -51,10 +51,11 @@ spec:
             description: The {{ $kind }} worker pool is scaled to zero or can't start or authenticate (image, GPU quota, worker token; see grad_worker_auth_total).
         {{- end }}
         - alert: GradJobFailureRateHigh
+          # The ratio first: `and` keeps the left side's value, which the summary shows.
           expr: |
-            sum by (kind) (increase(grad_job_failures_total{ {{- $sel }}}[30m])) >= {{ $r.failureMinJobs }}
-              and sum by (kind) (increase(grad_job_failures_total{ {{- $sel }}}[30m]))
+            sum by (kind) (increase(grad_job_failures_total{ {{- $sel }}}[30m]))
                 / clamp_min(sum by (kind) (increase(grad_job_duration_seconds_count{ {{- $sel }}}[30m])), 1) > {{ $r.failureRatio }}
+              and sum by (kind) (increase(grad_job_failures_total{ {{- $sel }}}[30m])) >= {{ $r.failureMinJobs }}
           for: 10m
           labels: {severity: warning}
           annotations:

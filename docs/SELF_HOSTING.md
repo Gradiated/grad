@@ -389,6 +389,8 @@ With `networkPolicy.enabled`, `metrics.allowFrom` says who may reach the metrics
 | `GradMaintenanceStalled` | The maintenance loop hasn't finished a tick for over 5 minutes, for 5 minutes | |
 | `GradSourcePaused` | A source was paused after repeated sync failures | |
 
+`tests/helm/alerts.sh` renders the rules, checks them with `promtool` and runs their unit tests (`tests/helm/alerts.test.yml`: series in, alerts and summaries out); CI runs it on every push.
+
 ### Runbook
 
 Each alert's `runbook_url` points at its entry here, at the chart's release tag. `kubectl` lines assume the release `grad` in namespace `grad`; every 5xx log line carries `request_id` and `trace_id`, and every job's lines carry `job_id`.

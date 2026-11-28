@@ -492,6 +492,9 @@ jobs:
           kubeconform -strict -summary -kubernetes-version 1.37.0 \
             -skip ScaledObject,TriggerAuthentication,ServiceMonitor,PodMonitor,PrometheusRule "$RUNNER_TEMP/rendered.yaml"
 
+      - name: Alert rules against Prometheus (promtool check and unit tests)
+        run: tests/helm/alerts.sh
+
   versions:
     name: One version across the repo
     runs-on: ubuntu-latest
