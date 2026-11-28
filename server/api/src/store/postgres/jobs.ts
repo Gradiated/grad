@@ -1,6 +1,6 @@
 import type { Clock } from "../../clock.js";
 import { queueLimit, workspaceInactive } from "../../errors.js";
-import { newId } from "../../ids.js";
+import { newJobId } from "../../ids.js";
 import {
   metricKind,
   metrics,
@@ -172,7 +172,6 @@ export const insertJob = async (
   db: Db,
   clock: Clock,
   input: {
-    prefix: string;
     kind: JobKind;
     workspaceId: string;
     maxAttempts: number;
@@ -188,7 +187,7 @@ export const insertJob = async (
     await assertQueueRoom(db, input.workspaceId, input.kind, input.maxQueued);
   }
   const ts = nowIso(clock);
-  const id = newId(input.prefix);
+  const id = newJobId(input.kind);
   // A worker's requests for this job join the creating request's trace.
   const traceparent = currentTraceparent();
   await db.query(

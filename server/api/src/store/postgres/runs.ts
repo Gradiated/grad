@@ -79,7 +79,6 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
     create: (input) =>
       repo.insert(
         {
-          prefix: "run",
           kind: "train",
           workspaceId: input.workspaceId,
           maxAttempts: input.maxAttempts,
@@ -129,7 +128,6 @@ export const createImportJobRepository = (
     createArtifactImport: (input) =>
       repo.insert(
         {
-          prefix: "imp",
           kind: "import",
           workspaceId: input.workspaceId,
           maxAttempts: input.maxAttempts,
@@ -144,7 +142,6 @@ export const createImportJobRepository = (
     create: (input) =>
       repo.insert(
         {
-          prefix: "imp",
           kind: "import",
           workspaceId: input.workspaceId,
           maxAttempts: input.maxAttempts,

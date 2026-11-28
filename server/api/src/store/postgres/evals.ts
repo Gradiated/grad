@@ -51,7 +51,6 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
     }) =>
       repo.insert(
         {
-          prefix: "eval",
           kind: "eval",
           workspaceId,
           maxAttempts,

@@ -31,19 +31,37 @@ import {
   requireScope,
   type AppEnv,
 } from "./helpers.js";
+import { jobKindOf } from "../ids.js";
+import type { JobKind } from "../store/types.js";
 import { assertClaimAllowed } from "../worker-auth/principal.js";
 
-const isImportJob = (id: string): boolean => id.startsWith("imp_");
-const isEvalJob = (id: string): boolean => id.startsWith("eval_");
+/** The kind of job `id` names (ids carry their kind's prefix), else 404. */
+const kindOf = (id: string): JobKind => {
+  const kind = jobKindOf(id);
+  if (!kind) throw notFound("trainer_job", id);
 
-/** Train-only endpoints refuse import and eval jobs. */
-const assertTrainJob = (id: string, what: string): void => {
-  if (isImportJob(id) || isEvalJob(id)) {
-    throw conflict(
-      "wrong_job_kind",
-      `${isImportJob(id) ? "Import" : "Eval"} jobs do not ${what}.`,
-    );
-  }
+  return kind;
+};
+
+/** An endpoint only `kinds` have refuses the other kinds' jobs (409 wrong_job_kind). */
+const requireKind = (
+  id: string,
+  kinds: readonly JobKind[],
+  detail: string,
+): JobKind => {
+  const kind = kindOf(id);
+  if (!kinds.includes(kind)) throw conflict("wrong_job_kind", detail);
+
+  return kind;
+};
+
+/** Who uploads what: eval jobs upload nothing. */
+const UPLOADERS: Readonly<
+  Record<z.infer<typeof WorkerUploadRequestSchema>["kind"], JobKind[]>
+> = {
+  checkpoint: ["train"],
+  artifact: ["train", "import"],
+  records: ["import"],
 };
 
 const body = <T extends z.ZodType>(schema: T) => ({
@@ -152,7 +170,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      assertTrainJob(id, "report events");
+      requireKind(id, ["train"], "Only train jobs report events.");
       await services.runs.reportEvent(principal, id, c.req.valid("json"));
 
       return c.body(null, 204);
@@ -179,7 +197,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      assertTrainJob(id, "report progress");
+      requireKind(id, ["train"], "Only train jobs report progress.");
 
       return c.json(
         await services.runs.progress(principal, id, c.req.valid("json")),
@@ -207,21 +225,15 @@ export const registerTrainerJobRoutes = (
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
       const input = c.req.valid("json");
-      if (isEvalJob(id)) {
-        throw conflict("wrong_job_kind", "Eval jobs upload nothing.");
-      }
-      const allowed = isImportJob(id)
-        ? input.kind !== "checkpoint"
-        : input.kind !== "records";
-      if (!allowed) {
-        throw conflict(
-          "wrong_job_kind",
-          "Train jobs upload checkpoints and artifacts; import jobs upload records parts (dataset imports) or their artifact bundle (artifact imports).",
-        );
-      }
-      const ticket = isImportJob(id)
-        ? await services.imports.createUpload(principal, id, input)
-        : await services.runs.createUpload(principal, id, input);
+      const kind = requireKind(
+        id,
+        UPLOADERS[input.kind],
+        "Train jobs upload checkpoints and artifacts; import jobs upload records parts (dataset imports) or their artifact bundle (artifact imports); eval jobs upload nothing.",
+      );
+      const ticket =
+        kind === "import"
+          ? await services.imports.createUpload(principal, id, input)
+          : await services.runs.createUpload(principal, id, input);
 
       return c.json(ticket, 201);
     },
@@ -248,7 +260,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      assertTrainJob(id, "have checkpoints");
+      requireKind(id, ["train"], "Only train jobs have checkpoints.");
       const { checkpoint, created } = await services.runs.registerCheckpoint(
         principal,
         id,
@@ -280,8 +292,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (!isImportJob(id))
-        throw conflict("wrong_job_kind", "Only import jobs stage parts.");
+      requireKind(id, ["import"], "Only import jobs stage parts.");
 
       return c.json(
         await services.imports.registerPart(principal, id, c.req.valid("json")),
@@ -311,8 +322,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (!isEvalJob(id))
-        throw conflict("wrong_job_kind", "Only eval jobs post outputs.");
+      requireKind(id, ["eval"], "Only eval jobs post outputs.");
 
       return c.json(
         await services.evals.postOutputs(principal, id, c.req.valid("json")),
@@ -340,8 +350,9 @@ export const registerTrainerJobRoutes = (
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
       const input = c.req.valid("json");
+      const kind = kindOf(id);
 
-      if (isEvalJob(id)) {
+      if (kind === "eval") {
         const ev = await services.evals.complete(principal, id, input);
 
         return c.json(
@@ -358,7 +369,7 @@ export const registerTrainerJobRoutes = (
         );
       }
 
-      if (isImportJob(id)) {
+      if (kind === "import") {
         const done = await services.imports.complete(principal, id, input);
 
         return c.json(
@@ -420,11 +431,13 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (isImportJob(id)) throw notFound("trainer_job", id);
+      const kind = kindOf(id);
+      if (kind === "import") throw notFound("trainer_job", id);
       const { attempt } = c.req.valid("query");
-      const stream = isEvalJob(id)
-        ? await services.evals.datasetStream(principal, id, attempt)
-        : await services.runs.datasetStream(principal, id, attempt);
+      const stream =
+        kind === "eval"
+          ? await services.evals.datasetStream(principal, id, attempt)
+          : await services.runs.datasetStream(principal, id, attempt);
 
       return new Response(stream, {
         status: 200,
