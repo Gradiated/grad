@@ -109,8 +109,14 @@ export type Dataset = z.infer<typeof DatasetSchema>;
 
 export const CreateDatasetRequestSchema = z
   .object({
-    name: SlugSchema,
-    metadata: z.record(z.string(), z.unknown()).optional(),
+    name: SlugSchema.openapi({
+      description:
+        "Dataset name: lowercase letters, digits, `.`, `_` and `-`, unique in the workspace.",
+    }),
+    metadata: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .openapi({ description: "Free-form metadata stored on the dataset." }),
   })
   .openapi("CreateDatasetRequest");
 
@@ -118,8 +124,14 @@ export const MAX_PUSH_RECORDS = 50_000;
 
 export const PushDatasetRequestSchema = z
   .object({
-    records: z.array(DatasetRecordSchema).min(1).max(MAX_PUSH_RECORDS),
-    metadata: z.record(z.string(), z.unknown()).optional(),
+    records: z.array(DatasetRecordSchema).min(1).max(MAX_PUSH_RECORDS).openapi({
+      description:
+        "Records to append; together they become the next dataset version.",
+    }),
+    metadata: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .openapi({ description: "Keys merged into the dataset's metadata." }),
   })
   .openapi("PushDatasetRequest");
 

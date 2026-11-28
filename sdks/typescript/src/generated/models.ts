@@ -238,7 +238,9 @@ export interface CompletedEvent {
 }
 
 export interface CreateApiKeyRequest {
+  /** Key name. */
   name: string;
+  /** The scopes the key gets (at least one); a `:write` scope includes its `:read`, and `admin` includes every workspace scope. */
   scopes: Array<ApiKeyScope>;
 }
 
@@ -252,7 +254,9 @@ export interface CreateArtifactImportRequest {
 }
 
 export interface CreateDatasetRequest {
+  /** Dataset name: lowercase letters, digits, `.`, `_` and `-`, unique in the workspace. */
   name: string;
+  /** Free-form metadata stored on the dataset. */
   metadata?: Record<string, unknown> | undefined;
 }
 
@@ -895,7 +899,9 @@ export interface PromoteCheckpointRequest {
 }
 
 export interface PushDatasetRequest {
+  /** Records to append; together they become the next dataset version. */
   records: Array<DatasetRecord>;
+  /** Keys merged into the dataset's metadata. */
   metadata?: Record<string, unknown> | undefined;
 }
 

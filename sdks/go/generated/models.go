@@ -421,7 +421,9 @@ const (
 
 // CreateAPIKeyRequest is generated from the OpenAPI schema.
 type CreateAPIKeyRequest struct {
-	Name   string        `json:"name"`
+	// Name Key name.
+	Name string `json:"name"`
+	// Scopes The scopes the key gets (at least one); a `:write` scope includes its `:read`, and `admin` includes every workspace scope.
 	Scopes []APIKeyScope `json:"scopes"`
 }
 
@@ -437,7 +439,9 @@ type CreateArtifactImportRequest struct {
 
 // CreateDatasetRequest is generated from the OpenAPI schema.
 type CreateDatasetRequest struct {
-	Name     string         `json:"name"`
+	// Name Dataset name: lowercase letters, digits, `.`, `_` and `-`, unique in the workspace.
+	Name string `json:"name"`
+	// Metadata Free-form metadata stored on the dataset.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -1861,8 +1865,10 @@ type PromoteCheckpointRequest struct {
 
 // PushDatasetRequest is generated from the OpenAPI schema.
 type PushDatasetRequest struct {
-	Records  []DatasetRecord `json:"records"`
-	Metadata map[string]any  `json:"metadata,omitempty"`
+	// Records Records to append; together they become the next dataset version.
+	Records []DatasetRecord `json:"records"`
+	// Metadata Keys merged into the dataset's metadata.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // RecipeEval is generated from the OpenAPI schema.

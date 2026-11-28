@@ -39,8 +39,11 @@ export type Scope = ApiKeyScope | PlatformScope;
 
 export const CreateApiKeyRequestSchema = z
   .object({
-    name: SlugSchema,
-    scopes: z.array(ApiKeyScopeSchema).min(1),
+    name: SlugSchema.openapi({ description: "Key name." }),
+    scopes: z.array(ApiKeyScopeSchema).min(1).openapi({
+      description:
+        "The scopes the key gets (at least one); a `:write` scope includes its `:read`, and `admin` includes every workspace scope.",
+    }),
   })
   .openapi("CreateApiKeyRequest");
 
