@@ -216,6 +216,54 @@ describe("runs", () => {
     await waitFor(() => expect(container.textContent).toContain("No runs match"));
   });
 
+  it("opens a row in this tab, or a new one with Cmd/Ctrl or the middle button; its title is a real link", async () => {
+    const opened = vi.fn();
+    vi.stubGlobal("open", opened);
+    const { container } = await boot();
+    await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
+    const row = byText(container, "tbody tr", "broken-dpo") as HTMLElement;
+    expect(row.querySelector("a.row-title")?.getAttribute("href")).toBe("/runs/run_f1");
+    await act(async () => {
+      row.querySelector("td:nth-child(3)")?.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+      row.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+    });
+    expect(opened.mock.calls).toEqual([
+      ["/runs/run_f1", "_blank", "noopener"],
+      ["/runs/run_f1", "_blank", "noopener"],
+    ]);
+    expect(location.pathname).toBe("/");
+    await click(row.querySelector("td:nth-child(3)"));
+    expect(location.pathname).toBe("/runs/run_f1");
+  });
+
+  it("keeps showing loaded runs when a refresh fails, and says so; says when the browser is offline", async () => {
+    let down = false;
+    const server = fakeServer(routes({ "GET /v1/runs": ({ url }: { url: URL }) => (down && url.searchParams.get("limit") === "50" ? problem(503, "unavailable", "database unreachable") : json({ data: [RUN], next_cursor: null })) }));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { container } = await boot(server);
+      await waitFor(() => expect(byText(container, "tbody tr", "support-sft")).toBeTruthy());
+      down = true;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(11_000);
+      });
+      await waitFor(() => expect(container.textContent).toContain("Couldn't refresh: database unreachable"));
+      expect(byText(container, "tbody tr", "support-sft")).toBeTruthy();
+      await act(async () => {
+        Object.defineProperty(navigator, "onLine", { value: false, configurable: true });
+        dispatchEvent(new Event("offline"));
+      });
+      expect(container.querySelector(".offline")?.textContent).toContain("You're offline");
+      await act(async () => {
+        Object.defineProperty(navigator, "onLine", { value: true, configurable: true });
+        dispatchEvent(new Event("online"));
+      });
+      expect(container.querySelector(".offline")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("focuses the filter with / and clears it with Escape", async () => {
     const { container } = await boot();
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
@@ -434,6 +482,17 @@ describe("datasets, evals, usage, health", () => {
     await click(byText(container, ".dialog button", "Sync"));
     await waitFor(() => expect(posted).toEqual(["sync"]));
     await waitFor(() => expect(container.textContent).toContain("Sync queued: imp_2"));
+  });
+
+  it("clamps a long record message and expands it in place", async () => {
+    const long = `${"word ".repeat(600)}END`;
+    const records = { data: [{ id: "rec_long", messages: [{ role: "user", content: long }] }], next_cursor: null };
+    const { container } = await boot(fakeServer(routes({ "GET /v1/datasets/support/records": records })), "/datasets/support");
+    await waitFor(() => expect(byText(container, ".msg button", "Show all 3,003 characters")).toBeTruthy());
+    expect(container.querySelector(".msg .content")?.textContent).toHaveLength(1_001);
+    await click(byText(container, ".msg button", "Show all"));
+    expect(container.querySelector(".msg .content")?.textContent).toContain("END");
+    expect(byText(container, ".msg button", "Show less")?.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("shows eval summaries with CIs, deltas and failures", async () => {

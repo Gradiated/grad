@@ -1,12 +1,12 @@
 import type { Run } from "@sdk/generated/models.js";
 
 import { IconRuns, IconSearch } from "../components/icons.js";
-import { Empty, ErrorBanner, LoadMore, SearchBox, Segmented, SkeletonRows, StatusBadge } from "../components/ui.js";
+import { Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SearchBox, Segmented, SkeletonRows, StatusBadge } from "../components/ui.js";
 import { isTerminalRun, lifecycleOf, useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
 import { ago, duration, usd } from "../lib/format.js";
 import { useDebounced, useNow, usePagedList } from "../lib/hooks.js";
-import { navigate, setQuery, useLocation } from "../lib/router.js";
+import { setQuery, useLocation } from "../lib/router.js";
 
 export type StatusFilter = "all" | "active" | "completed" | "failed" | "stopped";
 
@@ -63,7 +63,7 @@ export const RunsPage = () => {
         <SearchBox value={q} onChange={(v) => setQuery({ q: v })} placeholder="Filter by name or id" label="Filter runs" />
       </div>
 
-      <ErrorBanner error={list.error && list.items.length === 0 ? list.error : null} onRetry={list.reload} />
+      <ErrorBanner error={list.error} onRetry={list.reload} stale={list.items.length > 0} />
 
       <div className="card">
         <div className="table-wrap" tabIndex={0}>
@@ -107,12 +107,12 @@ const RunRow = ({ run, now }: { run: Run; now: number }) => {
   const active = !isTerminalRun(run);
   const progress = run.totalSteps > 0 ? run.currentStep / run.totalSteps : 0;
   const phase = life.phase ? (PHASE_LABEL[life.phase] ?? life.phase) : run.status === "queued" ? "Queued" : run.currentStep > 0 ? "Training" : "Starting";
-  const open = () => navigate(`/runs/${encodeURIComponent(run.id)}`);
+  const href = `/runs/${encodeURIComponent(run.id)}`;
   return (
-    <tr className="clickable" onClick={open} onKeyDown={(e) => e.key === "Enter" && open()} tabIndex={0}>
+    <tr {...rowLink(href)}>
       <td>
         <div className="cell-main">
-          <span className="title">{run.name}</span>
+          <RowTitle href={href}>{run.name}</RowTitle>
           <span className="sub">{run.id}</span>
         </div>
       </td>

@@ -580,13 +580,20 @@ table.table {
 }
 
 .table tbody tr.clickable:hover td,
-.table tbody tr.clickable:focus-visible td {
+.table tbody tr.clickable:focus-within td {
   background: var(--hover);
 }
 
-.table tbody tr.clickable:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+/* The row's title is its link: plain text until hovered, the focus ring on the link. */
+.row-title {
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.row-title:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .table .wrap {
@@ -1676,8 +1683,18 @@ details.disclosure:not([open]) > summary.card-header {
   mask-image: linear-gradient(to bottom, #000 70%, transparent);
 }
 
-.msg .content.short {
+.msg .content.short,
+.msg .content.open {
   mask-image: none;
+}
+
+.msg .content.open {
+  max-height: none;
+}
+
+.msg .more {
+  margin-top: 2px;
+  margin-left: -8px;
 }
 
 /* Sources, imports, worker pools and queued runs: one row per item. */
@@ -1942,4 +1959,20 @@ details.disclosure:not([open]) > summary.card-header {
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+.offline {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 16px;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 auto 16px;
+  max-width: 1280px;
+  backdrop-filter: blur(8px);
 }

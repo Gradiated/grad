@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Artifact } from "@sdk/generated/models.js";
 
 import { IconArtifacts, IconChevron, IconDownload, IconSearch } from "../components/icons.js";
-import { Badge, Card, Command, Confirm, Empty, ErrorBanner, Kv, LoadMore, SearchBox, SkeletonRows, useToast } from "../components/ui.js";
+import { Badge, Card, Command, Confirm, Empty, ErrorBanner, Kv, LoadMore, RowTitle, rowLink, SearchBox, SkeletonRows, useToast } from "../components/ui.js";
 import { useApi } from "../lib/api.js";
 import { ago, bytes, dateTime } from "../lib/format.js";
 import { useDebounced, useNow, usePagedList, useResource } from "../lib/hooks.js";
@@ -17,7 +17,7 @@ const ProvenanceValue = ({ artifact }: { artifact: Artifact }) => {
   const runId = p.runId ?? artifact.runId;
   if (p.source === "run" && runId)
     return (
-      <Link className="link mono" href={`/runs/${encodeURIComponent(runId)}`} onClick={(e) => e.stopPropagation()}>
+      <Link className="link mono" href={`/runs/${encodeURIComponent(runId)}`} >
         {runId}
       </Link>
     );
@@ -53,7 +53,7 @@ export const ArtifactsPage = () => {
         <div className="grow" />
         <SearchBox value={q} onChange={(v) => setQuery({ q: v })} placeholder="Filter by name" label="Filter artifacts" />
       </div>
-      <ErrorBanner error={list.error} onRetry={list.reload} />
+      <ErrorBanner error={list.error} onRetry={list.reload} stale={list.items.length > 0} />
       <div className="card">
         <div className="table-wrap" tabIndex={0}>
           <table className="table">
@@ -71,12 +71,11 @@ export const ArtifactsPage = () => {
             <tbody aria-busy={list.loading}>
               {list.loading && <SkeletonRows cols={7} />}
               {list.items.map((a) => {
-                const open = () => navigate(hrefOf(a));
                 return (
-                  <tr key={a.id} className="clickable" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
+                  <tr key={a.id} {...rowLink(hrefOf(a))}>
                     <td>
                       <div className="cell-main">
-                        <span className="title mono">{`${a.name}@${a.version}`}</span>
+                        <RowTitle href={hrefOf(a)} mono>{`${a.name}@${a.version}`}</RowTitle>
                         <span className="sub">{a.recipeKind}</span>
                       </div>
                     </td>

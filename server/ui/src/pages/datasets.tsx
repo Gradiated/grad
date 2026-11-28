@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from "react";
 
-import type { ChatMessage, DatasetRecord, ImportJob, Source } from "@sdk/generated/models.js";
+import type { DatasetRecord, ImportJob, Source } from "@sdk/generated/models.js";
 
 import { IconChevron, IconDatasets, IconImport, IconRefresh, IconSearch } from "../components/icons.js";
-import { Banner, Card, Confirm, Empty, ErrorBanner, LoadMore, SearchBox, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
+import { Banner, Card, Confirm, Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SearchBox, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { errorMessage, useApi } from "../lib/api.js";
 import { ago, dateTime, int, num } from "../lib/format.js";
+import { Message, recordTurns } from "../components/record.js";
 import { useDebounced, useNow, usePagedList, useResource } from "../lib/hooks.js";
-import { Link, navigate, setQuery, useLocation } from "../lib/router.js";
+import { Link, setQuery, useLocation } from "../lib/router.js";
 
 export const DatasetsPage = () => {
   const { client } = useApi();
@@ -28,7 +29,7 @@ export const DatasetsPage = () => {
         <div className="grow" />
         <SearchBox value={q} onChange={(v) => setQuery({ q: v })} placeholder="Filter by name" label="Filter datasets" />
       </div>
-      <ErrorBanner error={list.error} onRetry={list.reload} />
+      <ErrorBanner error={list.error} onRetry={list.reload} stale={list.items.length > 0} />
       <div className="card">
         <div className="table-wrap" tabIndex={0}>
           <table className="table">
@@ -44,12 +45,12 @@ export const DatasetsPage = () => {
             <tbody aria-busy={list.loading}>
               {list.loading && <SkeletonRows cols={5} />}
               {list.items.map((d) => {
-                const open = () => navigate(`/datasets/${encodeURIComponent(d.name)}`);
+                const href = `/datasets/${encodeURIComponent(d.name)}`;
                 return (
-                  <tr key={d.id} className="clickable" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
+                  <tr key={d.id} {...rowLink(href)}>
                     <td>
                       <div className="cell-main">
-                        <span className="title">{d.name}</span>
+                        <RowTitle href={href}>{d.name}</RowTitle>
                         <span className="sub">{d.id}</span>
                       </div>
                     </td>
@@ -168,24 +169,6 @@ const Records = ({ name, version }: { name: string; version: number }) => {
   );
 };
 
-const text = (c: unknown): string => {
-  if (typeof c === "string") return c;
-  if (Array.isArray(c)) return c.map((p) => (typeof p === "object" && p && "text" in p ? String((p as { text: unknown }).text) : typeof p === "string" ? p : JSON.stringify(p))).join("");
-  if (c === null || c === undefined) return "";
-  return JSON.stringify(c);
-};
-
-/** The conversation-ish parts of any record shape, as (role, text) pairs. */
-export const recordTurns = (r: DatasetRecord): { role: string; text: string }[] => {
-  const msgs = (m: ChatMessage[] | undefined) => (m ?? []).map((x) => ({ role: x.role, text: text(x.content) || (x.toolCalls ? JSON.stringify(x.toolCalls) : "") }));
-  const asTurns = (role: string, v: string | ChatMessage[] | undefined) => (v === undefined ? [] : typeof v === "string" ? [{ role, text: v }] : msgs(v));
-  if (r.messages?.length) return msgs(r.messages);
-  if (r.input?.messages) return [...msgs(r.input.messages), ...msgs(r.output?.turns)];
-  if (r.prompt !== undefined) return [...asTurns("prompt", r.prompt), ...asTurns("completion", r.completion), ...asTurns("chosen", r.chosen), ...asTurns("rejected", r.rejected)];
-  if (r.query !== undefined) return [{ role: "query", text: r.query }, ...(r.positive ? [{ role: "positive", text: r.positive }] : []), ...(r.negatives ?? []).slice(0, 2).map((n) => ({ role: "negative", text: n }))];
-  return [{ role: "record", text: JSON.stringify(r) }];
-};
-
 const RecordView = ({ record }: { record: DatasetRecord }) => {
   const turns = recordTurns(record).slice(0, 6);
   const scores = Object.entries(record.scores ?? {});
@@ -203,10 +186,7 @@ const RecordView = ({ record }: { record: DatasetRecord }) => {
         </div>
       </div>
       {turns.map((t, i) => (
-        <div key={i} className="msg">
-          <span className="role">{t.role}</span>
-          <span className={`content${t.text.length < 240 ? " short" : ""}`}>{t.text}</span>
-        </div>
+        <Message key={i} role={t.role} text={t.text} />
       ))}
     </div>
   );

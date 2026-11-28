@@ -1,12 +1,12 @@
 import type { EvalModelSummary, EvalRun } from "@sdk/generated/models.js";
 
 import { IconChevron, IconEvals } from "../components/icons.js";
-import { Badge, Banner, Card, Empty, ErrorBanner, LoadMore, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
+import { Badge, Banner, Card, Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
 import { useApi } from "../lib/api.js";
 import { ago, compact, dateTime, int, num, usd } from "../lib/format.js";
 import { useNow, usePagedList, useResource } from "../lib/hooks.js";
-import { Link, navigate } from "../lib/router.js";
-import { recordTurns } from "./datasets.js";
+import { Link } from "../lib/router.js";
+import { Message, recordTurns } from "../components/record.js";
 
 const TERMINAL_EVAL = new Set(["completed", "failed", "cancelled"]);
 
@@ -24,7 +24,7 @@ export const EvalsPage = () => {
           <div className="page-sub">Model comparisons and dataset scoring jobs.</div>
         </div>
       </div>
-      <ErrorBanner error={list.error} onRetry={list.reload} />
+      <ErrorBanner error={list.error} onRetry={list.reload} stale={list.items.length > 0} />
       <div className="card">
         <div className="table-wrap" tabIndex={0}>
           <table className="table">
@@ -41,13 +41,13 @@ export const EvalsPage = () => {
             <tbody aria-busy={list.loading}>
               {list.loading && <SkeletonRows cols={6} />}
               {list.items.map((e) => {
-                const open = () => navigate(`/evals/${encodeURIComponent(e.id)}`);
+                const href = `/evals/${encodeURIComponent(e.id)}`;
                 const frac = e.progress.totalOutputs > 0 ? e.progress.generated / e.progress.totalOutputs : 0;
                 return (
-                  <tr key={e.id} className="clickable" tabIndex={0} onClick={open} onKeyDown={(k) => k.key === "Enter" && open()}>
+                  <tr key={e.id} {...rowLink(href)}>
                     <td>
                       <div className="cell-main">
-                        <span className="title">{e.name}</span>
+                        <RowTitle href={href}>{e.name}</RowTitle>
                         <span className="sub">{e.id}</span>
                       </div>
                     </td>
@@ -270,10 +270,7 @@ const Failures = ({ run }: { run: EvalRun }) => {
           {recordTurns(f.record)
             .slice(-3)
             .map((t, i) => (
-              <div key={i} className="msg">
-                <span className="role">{t.role}</span>
-                <span className={`content${t.text.length < 240 ? " short" : ""}`}>{t.text}</span>
-              </div>
+              <Message key={i} role={t.role} text={t.text} />
             ))}
         </div>
       ))}

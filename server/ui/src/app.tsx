@@ -130,7 +130,29 @@ const Shell = ({ apiKey, onSignOut }: { apiKey: string | undefined; onSignOut: (
           </div>
         </nav>
       </aside>
-      <main className="main">{page.node}</main>
+      <main className="main">
+        <Offline />
+        {page.node}
+      </main>
+    </div>
+  );
+};
+
+/** The browser's own offline signal: requests will fail until it reconnects. */
+const Offline = () => {
+  const [online, setOnline] = useState(() => navigator.onLine !== false);
+  useEffect(() => {
+    const on = () => setOnline(navigator.onLine !== false);
+    addEventListener("online", on);
+    addEventListener("offline", on);
+    return () => {
+      removeEventListener("online", on);
+      removeEventListener("offline", on);
+    };
+  }, []);
+  return online ? null : (
+    <div className="offline" role="status">
+      You're offline. Pages show what they last loaded and refresh when the connection returns.
     </div>
   );
 };

@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
 import { errorMessage } from "../lib/api.js";
 import { humanize } from "../lib/format.js";
 import type { PagedList } from "../lib/hooks.js";
+import { Link, navigate } from "../lib/router.js";
 import { IconAlert, IconCheck, IconCopy, IconInbox, IconInfo, IconRefresh, IconSearch } from "./icons.js";
 
 // ------------------------------------------------------------ status
@@ -85,9 +86,11 @@ export const Banner = ({ tone = "error", action, children }: { tone?: "error" | 
   </div>
 );
 
-export const ErrorBanner = ({ error, onRetry }: { error: unknown; onRetry?: () => void }) =>
+/** An API error with a Retry button; `stale` says the page still shows what it loaded before. */
+export const ErrorBanner = ({ error, onRetry, stale }: { error: unknown; onRetry?: () => void; stale?: boolean }) =>
   error ? (
     <Banner
+      tone={stale ? "warn" : "error"}
       action={
         onRetry && (
           <button type="button" className="btn sm" onClick={onRetry}>
@@ -96,7 +99,7 @@ export const ErrorBanner = ({ error, onRetry }: { error: unknown; onRetry?: () =
         )
       }
     >
-      {errorMessage(error)}
+      {stale ? `Couldn't refresh: ${errorMessage(error)}. Showing what was loaded; retrying.` : errorMessage(error)}
     </Banner>
   ) : null;
 
@@ -181,6 +184,32 @@ export const SearchBox = ({ value, onChange, placeholder, label }: { value: stri
     </label>
   );
 };
+
+/**
+ * Makes a table row open `href`: a click anywhere on it navigates, Cmd/Ctrl- or
+ * middle-click opens a new tab, and selecting text doesn't navigate. The row's
+ * title is a real link (`RowTitle`), so keyboards and screen readers get one.
+ */
+export const rowLink = (href: string) => {
+  const away = (e: ReactMouseEvent<HTMLTableRowElement>) => (e.target as HTMLElement).closest("a, button, input") !== null || (globalThis.getSelection?.()?.toString() ?? "") !== "";
+  return {
+    className: "clickable",
+    onClick: (e: ReactMouseEvent<HTMLTableRowElement>) => {
+      if (away(e)) return;
+      if (e.metaKey || e.ctrlKey) open(href, "_blank", "noopener");
+      else navigate(href);
+    },
+    onAuxClick: (e: ReactMouseEvent<HTMLTableRowElement>) => {
+      if (e.button === 1 && !away(e)) open(href, "_blank", "noopener");
+    },
+  };
+};
+
+export const RowTitle = ({ href, mono, children }: { href: string; mono?: boolean; children: ReactNode }) => (
+  <Link href={href} className={`title row-title${mono ? " mono" : ""}`}>
+    {children}
+  </Link>
+);
 
 // ------------------------------------------------------------ copy
 
