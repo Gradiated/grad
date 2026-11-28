@@ -238,22 +238,7 @@ export const registerRunRoutes = (
       const query = c.req.valid("query");
 
       if (!(c.req.header("accept") ?? "").includes("text/event-stream")) {
-        const result = await services.runs.metrics(workspaceId, id, {
-          cursor: query.cursor,
-          afterStep: query.after_step,
-          limit: query.limit,
-        });
-
-        return c.json(
-          {
-            run_id: result.run.id,
-            status: result.run.status,
-            data: result.data,
-            next_cursor: result.next_cursor,
-            tail_cursor: result.tail_cursor,
-          },
-          200,
-        );
+        return c.json(await services.runs.metrics(workspaceId, id, query), 200);
       }
 
       await services.runs.get(workspaceId, id);
@@ -318,18 +303,7 @@ export const registerRunRoutes = (
       const query = c.req.valid("query");
 
       if (!(c.req.header("accept") ?? "").includes("text/event-stream")) {
-        const result = await services.runs.events(workspaceId, id, query);
-
-        return c.json(
-          {
-            run_id: result.run.id,
-            status: result.run.status,
-            data: result.data,
-            next_cursor: result.next_cursor,
-            tail_cursor: result.tail_cursor,
-          },
-          200,
-        );
+        return c.json(await services.runs.events(workspaceId, id, query), 200);
       }
 
       await services.runs.get(workspaceId, id);

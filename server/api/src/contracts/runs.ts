@@ -679,6 +679,8 @@ export const MetricsPageSchema = z
   })
   .openapi("MetricsPage");
 
+export type MetricsPage = z.infer<typeof MetricsPageSchema>;
+
 export const ArtifactFormatSchema = z
   .enum([
     "peft_lora",
@@ -931,3 +933,5 @@ export const RunEventsPageSchema = z
     }),
   })
   .openapi("RunEventsPage");
+
+export type RunEventsPage = z.infer<typeof RunEventsPageSchema>;

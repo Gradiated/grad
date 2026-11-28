@@ -12,13 +12,14 @@ import {
   type ArtifactFormat,
   type Checkpoint,
   type DatasetRecord,
-  type MetricPoint,
+  type MetricsPage,
   type PlanRunRequest,
   type InterruptionReason,
   type PlanRunResponse,
   type RecipeKind,
   type Run,
   type RunEvent,
+  type RunEventsPage,
   type TrainerJob,
   type UploadTicket,
 } from "../contracts.js";
@@ -151,8 +152,6 @@ export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
   }
 };
 
-/** Tokens are the source of truth; cost is derived from them in one place. */
-/** Retention: the last N checkpoints of a run stay, plus the best and final ones. */
 /**
  * Run names aren't unique (artifacts get versioned names), so a second run
  * under a busy name only warns: "run support-sft is already running (run_abc);
@@ -169,6 +168,7 @@ export const sameNameWarning = (
   return `${active.length} runs named ${first?.name ?? ""} are already queued or running (${active.map((r) => r.id).join(", ")}); this starts another one.`;
 };
 
+/** Retention: the last N checkpoints of a run stay, plus the best and final ones. */
 export const CHECKPOINTS_KEPT = 3;
 /** Base models up to this much GPU memory (an encoder) train fine on a CPU worker. */
 const CPU_TRAINABLE_GB = 4;
@@ -195,6 +195,7 @@ export const bestCheckpoint = (
       : acc;
   }, null);
 
+/** Tokens are the source of truth; cost is derived from them in one place. */
 const runCost = (run: RunRecord, attemptTokens = run.attempt_tokens): number =>
   costForTokens(
     run.billed_tokens + attemptTokens,
@@ -306,7 +307,7 @@ export interface EventsQuery {
 
 export interface MetricsQuery {
   cursor?: string | undefined;
-  afterStep?: number | undefined;
+  after_step?: number | undefined;
   limit: number;
 }
 
@@ -326,22 +327,12 @@ export interface RunLifecycle {
     workspaceId: string,
     id: string,
     query: MetricsQuery,
-  ): Promise<{
-    run: Run;
-    data: MetricPoint[];
-    next_cursor: string | null;
-    tail_cursor: string;
-  }>;
+  ): Promise<MetricsPage>;
   events(
     workspaceId: string,
     id: string,
     query: EventsQuery,
-  ): Promise<{
-    run: Run;
-    data: RunEvent[];
-    next_cursor: string | null;
-    tail_cursor: string;
-  }>;
+  ): Promise<RunEventsPage>;
   /**
    * How a run's event stream ends once the event hub reports it settled:
    * `done` is false when it was resumed meanwhile (keep following); `event`
@@ -1200,7 +1191,8 @@ export const createRunLifecycle = (
       if (done) data.push(done);
 
       return {
-        run: await publicRun(run),
+        run_id: run.id,
+        status: run.status,
         data,
         next_cursor: more ? encodeCursor([lastSeq]) : null,
         tail_cursor: encodeCursor([lastSeq]),
@@ -1224,13 +1216,13 @@ export const createRunLifecycle = (
       ).map(toMetricPoint);
       const page = rows.slice(0, query.limit);
       const last = page[page.length - 1];
+      const afterStep = query.after_step;
       const data =
-        query.afterStep === undefined
-          ? page
-          : page.filter((m) => m.step > (query.afterStep as number));
+        afterStep === undefined ? page : page.filter((m) => m.step > afterStep);
 
       return {
-        run: toPublicRun(run),
+        run_id: run.id,
+        status: run.status,
         data,
         next_cursor:
           rows.length > query.limit && last ? encodeCursor([last.seq]) : null,
