@@ -403,6 +403,10 @@ export const extractBundle = async (archive: string, dest: string): Promise<void
     if (got === undefined) throw unsafe(`manifest.json lists ${JSON.stringify(name)}, which is missing from the bundle.`);
     if (got !== String(want).toLowerCase()) throw new ChecksumMismatchError(`file ${name} of the bundle`, String(want), got);
   }
+  const reportSha = (manifest as { eval_report_sha256?: unknown }).eval_report_sha256;
+  if (typeof reportSha === "string" && seen.get("eval_report.json") !== reportSha.toLowerCase()) {
+    throw new ChecksumMismatchError("eval_report.json of the bundle", reportSha, seen.get("eval_report.json") ?? "");
+  }
 };
 
 /** Throws unless `dest` is missing or an empty directory (checked before a download starts). */

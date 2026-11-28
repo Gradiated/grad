@@ -69,6 +69,10 @@ func TestDownloadExtractWritesTheVerifiedFiles(t *testing.T) {
 		"symlink":   tarGz(t, []entry{{name: "manifest.json", body: manifest(nil)}, {name: "link", kind: tar.TypeSymlink}}),
 		"tampered":  tarGz(t, []entry{{name: "manifest.json", body: manifest(files)}, {name: "adapter_config.json", body: "{}"}, {name: "adapter_model.safetensors", body: "weights"}}),
 		"unlisted":  tarGz(t, []entry{{name: "manifest.json", body: manifest(nil)}, {name: "extra.bin", body: "x"}}),
+		"tampered-report": tarGz(t, []entry{
+			{name: "manifest.json", body: `{"format":"peft_lora","files":{},"eval_report_sha256":"` + sha(`{"loss":1}`) + `"}`},
+			{name: "eval_report.json", body: `{"loss":0.01}`},
+		}),
 	}
 	for ref, body := range bad {
 		routes["GET /v1/artifacts/"+ref+"/download"] = bundleRoute(body, sha(string(body)))

@@ -112,7 +112,8 @@ func extractBundle(archive, dest string) error {
 		return unsafeArchive("the bundle has no manifest.json")
 	}
 	var manifest struct {
-		Files map[string]string `json:"files"`
+		Files            map[string]string `json:"files"`
+		EvalReportSHA256 *string           `json:"eval_report_sha256"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Files == nil {
 		return unsafeArchive("manifest.json has no 'files' checksum map")
@@ -134,6 +135,11 @@ func extractBundle(archive, dest string) error {
 		}
 		if !strings.EqualFold(want, got) {
 			return &ChecksumMismatchError{GradError: newError("checksum_mismatch", "bundle file %q does not match its manifest checksum", name), Expected: want, Actual: got}
+		}
+	}
+	if want := manifest.EvalReportSHA256; want != nil {
+		if got := seen["eval_report.json"]; !strings.EqualFold(*want, got) {
+			return &ChecksumMismatchError{GradError: newError("checksum_mismatch", "eval_report.json does not match manifest.eval_report_sha256"), Expected: *want, Actual: got}
 		}
 	}
 	return nil

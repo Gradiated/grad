@@ -44,6 +44,11 @@ const BUNDLES: Record<string, Uint8Array> = {
   unlisted: tarGz([["manifest.json", manifest({})], ["extra.bin", "x"]]),
   // A name that is a property of every object ("constructor" in {} is true) is still unlisted.
   "unlisted-proto": tarGz([["manifest.json", manifest({})], ["constructor", "x"]]),
+  "tampered-report": tarGz([
+    ["manifest.json", JSON.stringify({ ...JSON.parse(manifest(FILES)), eval_report_sha256: sha('{"loss":1}') })],
+    ["eval_report.json", '{"loss":0.01}'],
+    ...Object.entries(FILES),
+  ]),
 };
 
 const server = () => {
@@ -70,13 +75,13 @@ describe("artifact downloads with extract", () => {
     expect(fake.callsTo("GET", "/v1/artifacts/good/download").length).toBe(downloads);
   });
 
-  it.each(["traversal", "symlink", "tampered", "unlisted", "unlisted-proto"])("refuses a %s bundle and leaves nothing behind", async (ref) => {
+  it.each(["traversal", "symlink", "tampered", "unlisted", "unlisted-proto", "tampered-report"])("refuses a %s bundle and leaves nothing behind", async (ref) => {
     const { grad } = makeGrad(server());
     const root = mkdtempSync(path.join(tmpdir(), "grad-extract-"));
     const dest = path.join(root, "out");
     const error = await grad.artifacts.download(ref, dest, { extract: true }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(GradError);
-    if (ref === "tampered") expect(error).toBeInstanceOf(ChecksumMismatchError);
+    if (ref.startsWith("tampered")) expect(error).toBeInstanceOf(ChecksumMismatchError);
     else expect((error as GradError).code).toBe("unsafe_archive");
     expect(existsSync(dest)).toBe(false);
     expect(readdirSync(root)).toEqual([]);
