@@ -11,6 +11,10 @@ secrets:
   # kept across upgrades (read back with lookup), and the Secret is kept on
   # `helm uninstall`. Read the admin key with:
   #   kubectl get secret <release>-grad -o jsonpath='{.data.admin-api-key}' | base64 -d
+  # Keeping them needs Helm's lookup, so only `helm install/upgrade` can: Argo CD
+  # and `helm template | kubectl apply` render without the cluster and would make
+  # new keys on every sync (workspace secrets sealed with the old secrets-key
+  # become unreadable). There, use create: false and a Secret you manage.
   create: true
   # With create: false, the name of a Secret you manage (kubectl, External
   # Secrets, sealed-secrets). Every key except database-url is optional:
