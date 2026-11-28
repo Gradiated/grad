@@ -19,6 +19,11 @@ describe("benchmark answer checks", () => {
     expect(finalNumberMatches("about 19", "18")).toBe(false);
     expect(finalNumberMatches("no number", "18")).toBe(false);
     expect(finalNumberMatches("18", null)).toBe(false);
+    // A list or a range is not one number, and a range's dash is no sign.
+    expect(finalNumberMatches("the primes are 2,3,5", "5")).toBe(true);
+    expect(finalNumberMatches("from 3-5", "5")).toBe(true);
+    expect(finalNumberMatches("it is -7", "-7")).toBe(true);
+    expect(finalNumberMatches("#### 1,234,567.5", "1234567.5")).toBe(true);
   });
 
   it("finds the chosen letter", () => {
@@ -29,6 +34,16 @@ describe("benchmark answer checks", () => {
     expect(choiceMatches("Answer: A", "C")).toBe(false);
     expect(choiceMatches("I think it's the second one", "B")).toBe(false);
     expect(choiceMatches("C", null)).toBe(false);
+    // Prose before the answer: "answer is a" names no option, "I" is a pronoun.
+    expect(choiceMatches("The answer is a bit tricky. Answer: C", "C")).toBe(
+      true,
+    );
+    expect(choiceMatches("The answer is a bit tricky. Answer: C", "A")).toBe(
+      false,
+    );
+    expect(choiceMatches("Answer: I think B", "I")).toBe(false);
+    expect(choiceMatches("Answer: I", "I")).toBe(true);
+    expect(choiceMatches("ANSWER: **D**", "D")).toBe(true);
   });
 
   it("pins every benchmark to a full commit", () => {

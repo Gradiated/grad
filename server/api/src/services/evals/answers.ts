@@ -1,4 +1,8 @@
-const NUMBER = /-?\d[\d,]*(?:\.\d+)?/g;
+/**
+ * A number: commas only as thousands separators ("1,018", not the list
+ * "2,3,5"), and a minus only as a sign (not the dash of a range, "3-5").
+ */
+const NUMBER = /(?<!\d)-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/g;
 
 const lastNumber = (text: string): number | null => {
   const marked = text.split("####");
@@ -23,8 +27,14 @@ export const finalNumberMatches = (
   return want !== null && got !== null && Math.abs(want - got) < 1e-6;
 };
 
+/**
+ * "Answer: C", "The answer is (b)", "**D**": a letter in parentheses may be
+ * lower case, a bare one must be a capital ("the answer is a bit…" names no
+ * option), and a bare "I" followed by a word is the pronoun ("Answer: I
+ * think B").
+ */
 const CHOICE_PATTERNS = [
-  /answer(?:\s+is)?\s*[:：]?\s*\(?\**([A-P])\b/i,
+  /(?:[Aa]nswer|ANSWER)(?:\s+is)?\s*[:：]?\s*(?:\(([A-Pa-p])\)|\**([A-HJ-P]|I(?!\s+[a-z]|['’]))\b)/,
   /^\s*\(?([A-P])[).:\s]*$/,
   /^\s*\(?([A-P])[).:]/,
 ];
@@ -38,7 +48,8 @@ export const choiceMatches = (
   const want = reference.trim().toUpperCase();
   for (const pattern of CHOICE_PATTERNS) {
     const match = pattern.exec(output);
-    if (match?.[1]) return match[1].toUpperCase() === want;
+    const letter = match?.[1] ?? match?.[2];
+    if (letter) return letter.toUpperCase() === want;
   }
 
   return false;
