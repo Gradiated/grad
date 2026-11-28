@@ -1501,6 +1501,61 @@ describe("postgres migrations", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("a migration waiting behind a long query gives up its lock queue, retries and lands", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const dir = await mkdtemp(
+      path.join(process.env.TMPDIR ?? "/tmp", "grad-mig-"),
+    );
+    const schema = freshSchemaName();
+    const reader = new pg.Client({ connectionString: url });
+    const other = new pg.Client({ connectionString: url });
+    await reader.connect();
+    await other.connect();
+    try {
+      await writeFile(
+        path.join(dir, "0001_t.sql"),
+        "CREATE TABLE t (id int); INSERT INTO t VALUES (1);",
+      );
+      await withPool((pool) => migrate(pool, { schema, dir }));
+      await writeFile(
+        path.join(dir, "0002_alter.sql"),
+        "ALTER TABLE t ADD COLUMN note text;",
+      );
+
+      // A live replica's long transaction holds a reader lock on t.
+      await reader.query("BEGIN");
+      await reader.query(`SELECT * FROM "${schema}".t`);
+      const lockTimeoutMs = 200;
+
+      await withPool(async (pool) => {
+        // Gives up after its tries, with a hint, instead of waiting forever.
+        await expect(
+          migrate(pool, { schema, dir, lockTimeoutMs, lockAttempts: 2 }),
+        ).rejects.toThrow(/0002_alter\.sql could not take its table locks/);
+
+        const landing = migrate(pool, { schema, dir, lockTimeoutMs });
+        // While it waits between tries, other queries on t are not queued
+        // behind its ACCESS EXCLUSIVE request for more than lock_timeout.
+        const started = Date.now();
+        for (let i = 0; i < 5; i++) {
+          await other.query(`SELECT count(*) FROM "${schema}".t`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(Date.now() - started).toBeLessThan(
+          5 * 100 + 5 * lockTimeoutMs + 500,
+        );
+        await reader.query("COMMIT");
+        expect(await landing).toEqual(["0002"]);
+      });
+    } finally {
+      await reader.end();
+      await other.end();
+      await dropSchema(url, schema);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("postgres store lifecycle", () => {

@@ -47,10 +47,62 @@ export const loadMigrations = async (
 
 const quoteIdent = (ident: string): string => `"${ident.replace(/"/g, '""')}"`;
 
+export interface MigrateOptions {
+  schema?: string | undefined;
+  dir?: string;
+  /** How long one DDL statement may wait for a table lock (default 5 s). */
+  lockTimeoutMs?: number;
+  /** Tries per migration when its locks time out (default 12, ~1.5 min). */
+  lockAttempts?: number;
+}
+
+const LOCK_NOT_AVAILABLE = "55P03";
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One migration in its own transaction. A DDL statement waiting for a table
+ * lock (behind a long query of a live replica) blocks every later query on
+ * that table, so it gives up after lock_timeout, rolls back and tries again.
+ */
+const applyOne = async (
+  client: PoolClient,
+  migration: MigrationFile,
+  attempts: number,
+): Promise<void> => {
+  for (let attempt = 1; ; attempt++) {
+    await client.query("BEGIN");
+    try {
+      await client.query(migration.sql);
+      await client.query(
+        "INSERT INTO grad_schema_migrations (version, name) VALUES ($1, $2)",
+        [migration.version, migration.name],
+      );
+      await client.query("COMMIT");
+      return;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      const code = (error as { code?: unknown }).code;
+      const message = error instanceof Error ? error.message : String(error);
+      if (code === LOCK_NOT_AVAILABLE && attempt < attempts) {
+        await sleep(Math.min(250 * 2 ** attempt, 10_000));
+        continue;
+      }
+      throw new Error(
+        code === LOCK_NOT_AVAILABLE
+          ? `Migration ${migration.name} could not take its table locks in ${attempts} tries (${message}): a long transaction holds them; find it in pg_stat_activity, then run the migration again.`
+          : `Migration ${migration.name} failed: ${message}`,
+      );
+    }
+  }
+};
+
 const applyPending = async (
   client: PoolClient,
   migrations: readonly MigrationFile[],
   schema: string | undefined,
+  attempts: number,
 ): Promise<string[]> => {
   if (schema) {
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schema)}`);
@@ -76,21 +128,7 @@ const applyPending = async (
   const ran: string[] = [];
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
-
-    await client.query("BEGIN");
-    try {
-      await client.query(migration.sql);
-      await client.query(
-        "INSERT INTO grad_schema_migrations (version, name) VALUES ($1, $2)",
-        [migration.version, migration.name],
-      );
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw new Error(
-        `Migration ${migration.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await applyOne(client, migration, attempts);
     ran.push(migration.version);
   }
 
@@ -100,7 +138,7 @@ const applyPending = async (
 /** Versions in `dir` not yet applied to the database (all of them on a fresh one). */
 export const pendingMigrations = async (
   pool: Pool,
-  options: { schema?: string | undefined; dir?: string } = {},
+  options: MigrateOptions = {},
 ): Promise<string[]> => {
   const migrations = await loadMigrations(options.dir);
   const table = options.schema
@@ -127,7 +165,7 @@ export const pendingMigrations = async (
  */
 export const migrate = async (
   pool: Pool,
-  options: { schema?: string | undefined; dir?: string } = {},
+  options: MigrateOptions = {},
 ): Promise<string[]> => {
   const migrations = await loadMigrations(options.dir);
   const client = await pool.connect();
@@ -136,11 +174,20 @@ export const migrate = async (
     // migration rewriting a big table, or a replica waiting here for another
     // to finish, may take longer, and would then fail on every boot.
     await client.query(
-      "SET statement_timeout = 0; SET idle_in_transaction_session_timeout = 0",
+      "SET statement_timeout = 0; SET idle_in_transaction_session_timeout = 0; SET lock_timeout = 0",
     );
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
+    // Only table locks time out, never the wait for another replica above.
+    await client.query(
+      `SET lock_timeout = ${Math.max(1, Math.trunc(options.lockTimeoutMs ?? 5_000))}`,
+    );
     try {
-      return await applyPending(client, migrations, options.schema);
+      return await applyPending(
+        client,
+        migrations,
+        options.schema,
+        options.lockAttempts ?? 12,
+      );
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
       if (options.schema) await client.query("RESET search_path");
@@ -148,7 +195,7 @@ export const migrate = async (
   } finally {
     await client
       .query(
-        "RESET statement_timeout; RESET idle_in_transaction_session_timeout",
+        "RESET statement_timeout; RESET idle_in_transaction_session_timeout; RESET lock_timeout",
       )
       .catch(() => undefined);
     client.release();

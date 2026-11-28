@@ -134,6 +134,31 @@ describe("migration files", () => {
     }
   });
 
+  it("an unreleased migration only expands the schema, unless a line says why a contract step is safe", async () => {
+    // The migrations Job runs before the rollout, so the previous release
+    // keeps serving on the new schema until its pods are replaced (and is
+    // what a rollback runs). Dropping or renaming what it reads breaks it;
+    // rewriting or scanning a big table under ACCESS EXCLUSIVE stalls every
+    // replica. Do those in a later release, or mark the line `-- contract: why`.
+    const UNSAFE = [
+      /\bDROP\s+(TABLE|COLUMN)\b/i,
+      /\bRENAME\b/i,
+      /\bALTER\s+COLUMN\s+\S+\s+(SET\s+DATA\s+)?TYPE\b/i,
+      /\bSET\s+NOT\s+NULL\b/i,
+    ];
+    for (const m of await loadMigrations()) {
+      if (m.name in RELEASED) continue;
+      for (const line of m.sql.split("\n")) {
+        const code = line.replace(/--.*$/, "");
+        const unsafe = UNSAFE.find((re) => re.test(code));
+        expect(
+          unsafe && !/--\s*contract:\s*\S/.test(line) ? line.trim() : null,
+          `${m.name}: a contract step (${String(unsafe)}) breaks the release still serving during the upgrade`,
+        ).toBeNull();
+      }
+    }
+  });
+
   it("upgrade an alpha.3 (0001), 0001-0005 or alpha.4 (0001-0009) database to the schema a fresh one gets", async () => {
     const url = postgresUrl();
     const all = (await loadMigrations()).map((m) => m.name);
