@@ -28,8 +28,8 @@ services:
       - /bin/sh
       - -c
       - >-
-        if grep -q '"secretKey": ""' /etc/seaweedfs/s3.json; then
-        echo 'no S3 key (GRAD_S3_SECRET_KEY): start the stack with grad local up' >&2; exit 1; fi;
+        if grep -q -e '"accessKey": ""' -e '"secretKey": ""' /etc/seaweedfs/s3.json; then
+        echo 'no S3 keys: set GRAD_S3_ACCESS_KEY and GRAD_S3_SECRET_KEY, or start the stack with grad local up' >&2; exit 1; fi;
         exec /entrypoint.sh "$$@"
       - seaweedfs
     command:

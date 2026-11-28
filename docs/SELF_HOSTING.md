@@ -67,7 +67,7 @@ The CPU trainer trains the dev models (`--dev-models`) and encoders in seconds t
 
 `tests/compose/smoke.sh` boots the stack with `grad local up --build --dev-models`, runs the quickstarts (including the README's router on `examples/support_traces.jsonl`) through the CLI and the Python SDK, evals the trained artifact against the base model with a validator and `test/tiny-judge` on `grad-dev-inference`, and checks the report in the CLI, the Python SDK and (with `GRAD_SMOKE_UI=1`) the web console; CI runs it on every push.
 
-Running `server/docker-compose.yml` directly with `docker compose` defaults to `AUTH_MODE=none` for development; the server logs a warning on every start because every request is then a platform admin. It needs the S3 store's key first, which `grad local up` otherwise generates; without it SeaweedFS exits ("no S3 key") and grad-server never starts:
+Running `server/docker-compose.yml` directly with `docker compose` defaults to `AUTH_MODE=none` for development; the server logs a warning on every start because every request is then a platform admin. It needs the S3 store's keys first, which `grad local up` otherwise generates; without them SeaweedFS exits ("no S3 keys: set GRAD_S3_ACCESS_KEY and GRAD_S3_SECRET_KEY") and grad-server never starts:
 
 ```bash
 export GRAD_S3_ACCESS_KEY=$(openssl rand -hex 16) GRAD_S3_SECRET_KEY=$(openssl rand -hex 32)
