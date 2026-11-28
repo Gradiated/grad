@@ -335,6 +335,8 @@ class Runner:
     def rewrite(self, code: str, n: int) -> str:
         for k, v in MODELS.items():
             code = code.replace(k, LOCAL_JUDGE if self.local else v)
+        if not self.local:  # the quickstart's dev-stack judge; the harness prices the catalog's
+            code = code.replace(LOCAL_JUDGE, MODELS["{{SONNET_MODEL}}"])
         if self.local:
             code = LOCAL_MODELS.sub(local_model, code)
         for host in HOSTS:
