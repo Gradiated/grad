@@ -358,6 +358,10 @@ describe("grad-server HTTP API", () => {
       method: "POST",
     });
     expect(finalizing.status).toBe(409);
+    expect(finalizing.body).toMatchObject({
+      code: "run_not_resumable",
+      detail: expect.stringContaining("resume it again in a few seconds"),
+    });
   });
 
   it("isolates every workspace route between two workspaces", async () => {

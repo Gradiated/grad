@@ -1279,7 +1279,9 @@ export const createRunLifecycle = (
       ) {
         throw conflict(
           "run_not_resumable",
-          `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, stopped_balance, failed or cancelled runs can be resumed.`,
+          run.worker_id !== null && run.status === "cancelled"
+            ? `Run '${id}' was just cancelled and its worker is still stopping; resume it again in a few seconds.`
+            : `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, stopped_balance, failed or cancelled runs can be resumed.`,
         );
       }
 
