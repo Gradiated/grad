@@ -1,7 +1,9 @@
 """Python SDK half of the compose smoke test (run by tests/compose/smoke.sh).
 
 Uses the 'local' profile that `grad local up` wrote, so it exercises the
-config-file fallback too. Trains on the tiny model with the CPU torch worker.
+config-file fallback too. Trains on the tiny model with the CPU torch worker,
+then evals the artifact on grad-dev-inference with a validator, a code scorer
+and the test/tiny-judge judge.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from grad import Grad, Rubric, Scorer, validators
+from grad import Grad, Judge, Rubric, Scorer, validators
 from grad.recipes import SFTRecipe
 
 LLM = "test/tiny-qwen3"
@@ -35,9 +37,16 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         out = run.artifact.download(Path(tmp) / "sdk-smoke")
         assert (out / "adapter_config.json").is_file(), sorted(p.name for p in out.iterdir())
-    rubric = Rubric([validators.NonEmpty(), Scorer("says_select", fn=lambda t: 1.0 if "select" in t.text.lower() else 0.0)])
+    rubric = Rubric(
+        [
+            validators.NonEmpty(),
+            Scorer("says_select", fn=lambda t: 1.0 if "select" in t.text.lower() else 0.0),
+            Judge(name="overlap", model="test/tiny-judge"),
+        ]
+    )
     ev = client.evals.create(name="sdk-smoke", models=[run.artifact, LLM], dataset=dataset, rubric=rubric, limit=4).wait(timeout=300)
     assert ev.status == "completed", ev.status
+    assert len(ev.summary) == 2 and all(row.tasks == 4 and row.errors == 0 for row in ev.summary), ev.summary
     print(ev.summary_table())
     print("sdk smoke ok:", run.artifact.ref)
 

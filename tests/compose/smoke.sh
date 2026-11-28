@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Boot the local stack from source with `grad local up --build --dev-models`,
 # run the quickstarts (including the README's router on the sample traces)
-# through the CLI and the Python SDK (CPU torch trainer, tiny dev models, fake
-# OpenAI-compatible inference), restart it to check the data persists, then
-# `grad local down --volumes` and check nothing is left.
+# through the CLI and the Python SDK (CPU torch trainer, tiny dev models), eval
+# the trained artifact with a validator and the test/tiny-judge judge on
+# grad-dev-inference and render the report (CLI, Python SDK and, with
+# GRAD_SMOKE_UI=1, the web console's live test), restart it to check the data
+# persists, then `grad local down --volumes` and check nothing is left.
 #
 #   GRAD_BIN=target/debug/grad GRAD_SMOKE_PYTHON=python3 tests/compose/smoke.sh
 #
@@ -11,6 +13,7 @@
 # GRAD_SMOKE_PORT pins the loopback API port; by default `grad local up` picks
 # 18787 or a free fallback and the 'local' profile follows it. The Python must
 # have httpx; the SDK is imported from sdks/python. KEEP=1 leaves the stack up.
+# GRAD_SMOKE_UI=1 also runs server/ui's live tests (needs `pnpm -C server/ui install`).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -24,13 +27,14 @@ export GRAD_COMPOSE_FILE="$ROOT/server/docker-compose.yml:$ROOT/tests/compose/sm
 export GRAD_POSTGRES_MEMORY=${GRAD_POSTGRES_MEMORY:-256m}
 export GRAD_SERVER_MEMORY=${GRAD_SERVER_MEMORY:-768m}
 export GRAD_TRAINER_MEMORY=${GRAD_TRAINER_MEMORY:-2g}
+export GRAD_DEV_INFERENCE_MEMORY=${GRAD_DEV_INFERENCE_MEMORY:-768m}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/grad-smoke.XXXXXX")
 export XDG_CONFIG_HOME="$WORK/config" XDG_DATA_HOME="$WORK/data" GRADIATED_PROFILE=local
 unset GRADIATED_API_KEY GRADIATED_BASE_URL
 cd "$WORK"
 
-step() { printf '\n== %s\n' "$*"; }
+step() { printf '\n== %s (at %ss)\n' "$*" "$SECONDS"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 cleanup() {
   status=$?
@@ -68,10 +72,26 @@ TRAIN=(--dataset support-prod --name support-sft --recipe sft --model test/tiny-
 grep -q "Exported artifact support-sft@" train.out || fail "train"
 "$GRAD" artifacts download support-sft@latest --output ./support-sft
 test -f support-sft/adapter_config.json && test -f support-sft/adapter_model.safetensors || fail "artifact files"
-printf -- '- name: nonempty\n  kind: validator\n  validator: non_empty\n' > rubric.yaml
+printf -- '- name: nonempty\n  kind: validator\n  validator: non_empty\n- name: overlap\n  kind: judge\n  model: test/tiny-judge\n' > rubric.yaml
 "$GRAD" eval --name smoke --models support-sft@latest,test/tiny-qwen3 --dataset support-prod \
-  --rubric rubric.yaml --limit 5 --wait | tee eval.out
-grep -q "support-sft@" eval.out || fail "eval"
+  --rubric rubric.yaml --limit 5 --baseline test/tiny-qwen3 --wait | tee eval.out
+grep -q "support-sft@" eval.out && grep -q "completed" eval.out || fail "eval"
+EVAL_ID=$("$GRAD" --json eval list | "$PY" -c 'import json,sys; print(next(e["id"] for e in json.load(sys.stdin)["data"]["data"] if e["name"] == "smoke"))')
+"$GRAD" --json eval status "$EVAL_ID" > eval.json
+# Real outputs from grad-dev-inference: every task generated and judged, no errors.
+"$PY" - eval.json <<'PY' || fail "eval report"
+import json, sys
+ev = json.load(open(sys.argv[1]))["data"]
+assert ev["status"] == "completed", ev["status"]
+assert ev["judge_models"] == ["test/tiny-judge"], ev["judge_models"]
+rows = {r["model"]: r for r in ev["summary"]}
+assert set(rows) == {"test/tiny-qwen3"} | {m for m in rows if m.startswith("support-sft@")} and len(rows) == 2, rows
+for row in rows.values():
+    assert row["tasks"] == 5 and row["errors"] == 0 and row["tokens_per_task"] > 0, row
+print("eval report ok:", {m: r["overall"] for m, r in rows.items()})
+PY
+"$GRAD" eval results "$EVAL_ID" | tee eval-results.out
+grep -q "support-sft@" eval-results.out || fail "eval results"
 
 step "README quickstart: a router on examples/support_traces.jsonl (dev models)"
 "$GRAD" import "$ROOT/examples/support_traces.jsonl" --dataset support-traces | tee readme-import.out
@@ -90,6 +110,13 @@ grep -q hf_smoke_not_a_real_token secrets.out && fail "secret value echoed"
 
 step "Python SDK quickstart"
 PYTHONPATH="$ROOT/sdks/python" "$PY" "$ROOT/tests/compose/smoke_sdk.py"
+
+if [ "${GRAD_SMOKE_UI:-0}" = 1 ]; then
+  step "web console: runs and the judged eval's report (server/ui live tests)"
+  ADMIN_KEY=$("$PY" -c 'import json,os,sys; print(json.load(open(os.path.join(os.environ["XDG_CONFIG_HOME"], "gradiated", "config.json")))["profiles"]["local"]["api_key"])')
+  GRAD_LIVE_BASE_URL=$API_URL GRAD_LIVE_API_KEY=$ADMIN_KEY GRAD_LIVE_EVAL_ID=$EVAL_ID \
+    pnpm -C "$ROOT/server/ui" exec vitest run --config vitest.live.config.ts || fail "web console"
+fi
 
 step "grad local status / logs"
 "$GRAD" local status | tee status.out

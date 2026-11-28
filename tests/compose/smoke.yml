@@ -1,26 +1,8 @@
 # Compose override for the local-stack smoke test (tests/compose/smoke.sh).
-# Test-only: points evals at an OpenAI-compatible fake. The tiny test models
-# come from `grad local up --dev-models`. Paths are relative to server/.
+# Test-only: the trainer never downloads. Evals call grad-dev-inference, which
+# `grad local up --dev-models` starts with the tiny test models. Paths are
+# relative to server/.
 services:
-  fake-openai:
-    image: node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
-    command: ["node", "/fixture/fake-openai.mjs"]
-    volumes:
-      - ../tests/compose/fake-openai.mjs:/fixture/fake-openai.mjs:ro
-    mem_limit: 128m
-
-  grad-server:
-    environment:
-      GRAD_INFERENCE_BASE_URL: "http://fake-openai:8080/v1"
-
-  grad-eval-worker:
-    depends_on:
-      fake-openai:
-        condition: service_started
-    environment:
-      GRAD_INFERENCE_BASE_URL: "http://fake-openai:8080/v1"
-      GRAD_INFERENCE_API_KEY: "sk-fake-inference"
-
   grad-trainer:
     environment:
       GRAD_OFFLINE: "1"

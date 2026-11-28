@@ -307,7 +307,7 @@ jobs:
           files: lcov.info
 
       - name: grad local up compose file is valid
-        run: docker compose -f cli/assets/docker-compose.yml -f cli/assets/dev-models.yml config --quiet
+        run: docker compose -f cli/assets/docker-compose.yml -f cli/assets/dev-models.yml --profile dev-models config --quiet
 
   stack-smoke:
     name: grad local up --build and Helm on kind (smoke tests)
@@ -322,7 +322,7 @@ jobs:
       - name: Install toolchain via mise
         uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          install_args: python rust
+          install_args: node pnpm python rust
 
       - name: Build the grad CLI
         run: cargo build --locked --bin grad
@@ -332,13 +332,20 @@ jobs:
           python3 -m venv /tmp/smoke-venv
           /tmp/smoke-venv/bin/pip install "httpx==0.29.0"
 
+      # The web console's live tests (happy-dom against the stack).
+      - name: Web UI dependencies
+        run: pnpm -C server/ui install --frozen-lockfile
+
       # Builds the images from source, runs the CLI and Python SDK quickstart
-      # (CPU torch trainer, tiny models, fake inference), restarts the stack to
-      # check persistence, then tears it down with its volumes.
-      - name: grad local up --build, quickstart, restart, down --volumes
+      # (CPU torch trainer, tiny models), evals the trained artifact with a judge
+      # on grad-dev-inference and checks the report in the CLI, the SDK and the
+      # web console, restarts the stack to check persistence, then tears it down
+      # with its volumes.
+      - name: grad local up --build, quickstart, eval, restart, down --volumes
         env:
           GRAD_BIN: ${{ github.workspace }}/target/debug/grad
           GRAD_SMOKE_PYTHON: /tmp/smoke-venv/bin/python
+          GRAD_SMOKE_UI: "1"
         run: tests/compose/smoke.sh
 
       - name: Install pinned kind, kubectl, helm and kubeconform
@@ -370,6 +377,7 @@ jobs:
         run: |
           docker compose -f server/docker-compose.yml config --quiet
           docker compose -f server/docker-compose.yml -f tests/compose/smoke.yml config --quiet
+          docker compose -f server/docker-compose.yml -f tests/compose/smoke.yml -f cli/assets/dev-models.yml --profile dev-models config --quiet
 
       - name: Lint, template and kubeconform the Helm chart (default, kind, air-gapped/KEDA, monitoring, Cloud)
         run: |
