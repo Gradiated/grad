@@ -743,8 +743,10 @@ Use --plain or GRAD_NO_TUI=1 for line output.")]
         run: String,
     },
     /// Promote a checkpoint into a new immutable artifact
-    #[command(after_help = "Example (pick a checkpoint id from `grad runs checkpoints RUN`):
-  grad runs promote ckpt_3f9c0a1b2c3d4e5f60718293 --name support-sft-step-400")]
+    #[command(
+        after_help = "Example (pick a checkpoint id from `grad runs checkpoints RUN`):
+  grad runs promote ckpt_3f9c0a1b2c3d4e5f60718293 --name support-sft-step-400"
+    )]
     Promote {
         /// Checkpoint id
         checkpoint: String,
