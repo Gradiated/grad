@@ -1182,6 +1182,48 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
     assert!(r.stdout.contains("Follow it: grad runs watch run_1"));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_closed_stdout_pipe_ends_grad_quietly_instead_of_panicking() {
+    use std::os::unix::process::ExitStatusExt;
+    let srv = api();
+    let sb = Sandbox::new("pipe");
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("grad"))
+        .current_dir(&sb.dir)
+        .env("HOME", &sb.dir)
+        .env("XDG_CONFIG_HOME", sb.dir.join("xdg"))
+        .env("GRAD_RETRY_BASE_MS", "1")
+        .env("GRADIATED_BASE_URL", &srv.url)
+        .env("GRADIATED_API_KEY", "grad_cli_test")
+        .env_remove("GRADIATED_PROFILE")
+        .args([
+            "train",
+            "--dataset",
+            "support-prod",
+            "--name",
+            "support-router",
+            "--recipe",
+            "router",
+            "--wait",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // `grad train --wait | head -0`: the reader is gone before grad prints anything.
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "{}", stderr);
+    assert_ne!(out.status.code(), Some(101), "{}", stderr);
+    assert!(
+        out.status.success() || out.status.signal() == Some(13),
+        "status {:?}: {}",
+        out.status,
+        stderr
+    );
+}
+
 fn failing_server(status: &'static str) -> MockServer {
     MockServer::start(move |r| match (r.method.as_str(), r.path()) {
         ("POST", "/v1/runs") => Reply::json(202, run_obj("run_f", "n", "queued")),
