@@ -56,7 +56,8 @@ export interface JwtVerifierOptions {
 export const looksLikeJwt = (token: string): boolean =>
   /^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
 
-const b64json = (segment: string): Record<string, unknown> | null => {
+/** A base64url JSON object segment (a JWT header or payload, unverified), or null. */
+export const b64json = (segment: string): Record<string, unknown> | null => {
   try {
     const value = JSON.parse(
       Buffer.from(segment, "base64url").toString("utf8"),
@@ -147,7 +148,7 @@ const verifySignature = (
   }
 };
 
-const authUnavailable = (detail: string) =>
+export const authUnavailable = (detail: string) =>
   new ApiError(
     503,
     "auth_unavailable",

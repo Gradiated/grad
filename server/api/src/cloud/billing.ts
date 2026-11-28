@@ -5,10 +5,14 @@ import {
 } from "../adapters.js";
 import { nanoUsd } from "../catalog.js";
 import type { Clock } from "../clock.js";
-import { ApiError, errorMessage } from "../errors.js";
+import { errorMessage } from "../errors.js";
 import { metrics } from "../telemetry/metrics.js";
 import { cloudRequest, detailOf, isOk, type CloudResponse } from "./http.js";
-import { pricesUnavailable, type CloudPrices } from "./prices.js";
+import {
+  billingUnavailable,
+  pricesUnavailable,
+  type CloudPrices,
+} from "./prices.js";
 
 /**
  * Gradiated Cloud billing: the balance check at create time and at every
@@ -28,14 +32,6 @@ export interface CloudBillingOptions {
   /** Evals call the gateway (GRAD_CLOUD_GATEWAY_URL), which bills their tokens. */
   gatewayBillsEvals?: boolean;
 }
-
-const billingUnavailable = (detail: string) =>
-  new ApiError(
-    503,
-    "billing_unavailable",
-    "Billing service unavailable",
-    detail,
-  );
 
 const counted = (
   op: "start" | "continue",

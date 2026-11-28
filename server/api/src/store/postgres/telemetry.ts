@@ -1,9 +1,7 @@
 import type { TelemetryRepository, TelemetrySnapshot } from "../types.js";
 import type { Db } from "./db.js";
 import { onlineWorkers } from "./jobs.js";
-
-const num = (v: unknown): number =>
-  v === null || v === undefined ? 0 : Number(v);
+import { n as num } from "./mappers.js";
 
 /**
  * The few aggregate reads behind grad-server's gauges, run once per

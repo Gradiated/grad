@@ -3,7 +3,7 @@ import { z } from "zod";
 import { inferenceSku, trainSku, type ModelCatalog } from "../catalog.js";
 import type { TrainableModel } from "../contracts.js";
 import type { Clock } from "../clock.js";
-import { ApiError } from "../errors.js";
+import { ApiError, issuesOf } from "../errors.js";
 import { log } from "../telemetry/log.js";
 import { watchPriceList } from "../telemetry/metrics.js";
 import { cloudRequest, detailOf, isOk } from "./http.js";
@@ -30,11 +30,16 @@ const PriceListSchema = z.object({
 });
 
 /** No price list yet (a boot during a billing outage) or none confirmed for 24 h. */
-export const pricesUnavailable = (): ApiError =>
+export const billingUnavailable = (detail: string): ApiError =>
   new ApiError(
     503,
     "billing_unavailable",
     "Billing service unavailable",
+    detail,
+  );
+
+export const pricesUnavailable = (): ApiError =>
+  billingUnavailable(
     "The Gradiated Cloud price list is unavailable, so new runs and evals cannot be priced; retry shortly.",
   );
 
@@ -90,9 +95,7 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
     }
     const parsed = PriceListSchema.safeParse(res.json);
     if (!parsed.success) {
-      throw new Error(
-        `unexpected body: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-      );
+      throw new Error(`unexpected body: ${issuesOf(parsed.error)}`);
     }
     list = {
       version: parsed.data.price_version,

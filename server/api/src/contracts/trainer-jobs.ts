@@ -17,7 +17,6 @@ import {
   ArtifactFormatSchema,
   ArtifactProvenanceSchema,
   ArtifactSchema,
-  CheckpointSchema,
   GpuInfoSchema,
   InterruptionReasonSchema,
   MetricPointInputSchema,
@@ -70,13 +69,6 @@ export const ClaimJobRequestSchema = z
     }),
   })
   .openapi("ClaimJobRequest");
-
-export const SignedDownloadSchema = z.object({
-  download_url: z.string().min(1).openapi({
-    description:
-      "Absolute presigned URL, or a path relative to the API base URL that requires the worker's bearer key.",
-  }),
-});
 
 export const TrainerJobSchema = z
   .object({
@@ -533,8 +525,6 @@ export const CompleteJobResponseSchema = z
     artifact_import: ArtifactImportSchema.nullable().optional(),
   })
   .openapi("CompleteTrainerJobResponse");
-
-export const RegisterCheckpointResponseSchema = CheckpointSchema;
 
 export const SourcePageRequestSchema = z
   .object({

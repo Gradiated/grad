@@ -13,6 +13,7 @@ import https from "node:https";
 
 import type { WorkerJobKind } from "../adapters.js";
 import type { Clock } from "../clock.js";
+import { b64json } from "../cloud/jwt.js";
 import { ApiError } from "../errors.js";
 import { log } from "../telemetry/log.js";
 import { metrics, secondsSince } from "../telemetry/metrics.js";
@@ -138,21 +139,6 @@ const JWT_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const SA_USER_RE =
   /^system:serviceaccount:([a-z0-9][-a-z0-9]*):([a-z0-9][-.a-z0-9]*)$/;
 const POD_NAME_KEY = "authentication.kubernetes.io/pod-name";
-
-/** A JWT's payload, unverified: only used to skip review of tokens that cannot pass it, and to bound caching. */
-const jwtClaims = (token: string): Record<string, unknown> | undefined => {
-  try {
-    const payload: unknown = JSON.parse(
-      Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
-    );
-
-    return payload !== null && typeof payload === "object"
-      ? (payload as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 /**
  * Whether a token could pass review: a projected service-account token for
@@ -285,7 +271,7 @@ export const createKubernetesWorkerAuth = (options: {
       // leave grad-server, nor do JWTs that claim another audience or account.
       if (token.length > 16_384 || !JWT_RE.test(token)) return null;
       const now = options.clock.now().getTime();
-      const claims = jwtClaims(token);
+      const claims = b64json(token.split(".")[1] ?? "") ?? undefined;
       if (!worthReviewing(claims, options.serviceAccounts, now)) return null;
       const key = createHash("sha256").update(token).digest("hex");
       const hit = cache.get(key);

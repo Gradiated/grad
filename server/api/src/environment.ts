@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { cloudUrl } from "./cloud/http.js";
+import { issuesOf } from "./errors.js";
 import {
   parseWorkerAuthConfig,
   type WorkerAuthConfig,
@@ -258,9 +259,7 @@ const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
   }
   const parsed = TrainerKeysSchema.safeParse(json);
   if (!parsed.success) {
-    throw new Error(
-      `Invalid TRAINER_KEYS_JSON: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
+    throw new Error(`Invalid TRAINER_KEYS_JSON: ${issuesOf(parsed.error)}`);
   }
   const labels = parsed.data.map((k) => k.label);
   const dup = labels.find((l, i) => labels.indexOf(l) !== i);
@@ -296,9 +295,7 @@ export const parseServerEnvironment = (
 ): ServerEnvironment => {
   const parsed = EnvironmentSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new Error(
-      `Invalid server configuration: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
+    throw new Error(`Invalid server configuration: ${issuesOf(parsed.error)}`);
   }
 
   const env = parsed.data;
@@ -470,7 +467,7 @@ export const parseEvalWorkerEnvironment = (
   const parsed = WorkerEnvironmentSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(
-      `Invalid eval worker configuration: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+      `Invalid eval worker configuration: ${issuesOf(parsed.error)}`,
     );
   }
   const warnings: string[] = [];

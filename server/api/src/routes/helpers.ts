@@ -3,7 +3,7 @@ import { z } from "@hono/zod-openapi";
 
 import { hasScope, type AuthPrincipal } from "../adapters.js";
 import { ProblemSchema, type Scope } from "../contracts.js";
-import { ApiError, type ProblemStatus } from "../errors.js";
+import { ApiError } from "../errors.js";
 import { metrics } from "../telemetry/metrics.js";
 
 export type AppEnv = {
@@ -71,24 +71,38 @@ export const problemBody = (
   };
 };
 
-export const respondProblem = <S extends ProblemStatus>(
-  c: Context<AppEnv>,
-  status: S,
+/** A problem+json response (with `x-request-id`). */
+export const problemResponse = (
+  requestId: string,
+  status: number,
   code: string,
   title: string,
   detail: string,
-) =>
-  c.json(
-    problemBody(
+): Response =>
+  new Response(
+    JSON.stringify(problemBody(status, code, title, detail, requestId)),
+    {
       status,
-      code,
-      title,
-      detail,
-      c.get("requestId") ?? "req_unknown",
-    ),
-    status,
-    { "Content-Type": "application/problem+json" },
+      headers: {
+        "Content-Type": "application/problem+json",
+        "x-request-id": requestId,
+      },
+    },
   );
+
+/** The request's JSON body; 400 malformed_request when it isn't JSON. */
+export const readJson = async (c: Context): Promise<unknown> => {
+  try {
+    return await c.req.json();
+  } catch {
+    throw new ApiError(
+      400,
+      "malformed_request",
+      "Malformed request",
+      "The body must be JSON.",
+    );
+  }
+};
 
 /** Throws 403 unless the authenticated principal holds `scope`. */
 export const requireScope = (

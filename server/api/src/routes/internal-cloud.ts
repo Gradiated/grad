@@ -19,10 +19,17 @@ import { z } from "zod";
 import type { JwtVerifier } from "../cloud/jwt.js";
 import { PinHolderSchema } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import { ApiError, notFound } from "../errors.js";
+import {
+  ApiError,
+  notFound,
+  parseBearer,
+  unauthorized,
+  validationFailed,
+} from "../errors.js";
 import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
 import { log } from "../telemetry/log.js";
+import { readJson } from "./helpers.js";
 
 export const CLOUD_SERVICE_SCOPES = [
   "workspaces:admin",
@@ -45,9 +52,6 @@ export interface CloudInternalDeps {
 /** How long a resolve's presigned GET stays valid. */
 const RESOLVE_URL_SECONDS = 900;
 
-const unauthorized = (detail: string) =>
-  new ApiError(401, "unauthorized", "Authentication required", detail);
-
 /** The service the token names, after checking its workspace and scope. */
 const authorize = async (
   c: Context,
@@ -56,14 +60,9 @@ const authorize = async (
 ): Promise<{ workspaceId: string; service: string }> => {
   const workspaceId = c.req.param("ws") ?? "";
   if (!WORKSPACE_RE.test(workspaceId)) {
-    throw new ApiError(
-      422,
-      "validation_error",
-      "Validation failed",
-      "ws: invalid.",
-    );
+    throw validationFailed("ws: invalid.");
   }
-  const token = c.req.header("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const token = parseBearer(c.req.header("authorization"));
   const claims = token ? await jwt.verify(token) : null;
   if (!claims || !claims.sub.startsWith("service:")) {
     throw unauthorized(
@@ -83,19 +82,6 @@ const authorize = async (
   return { workspaceId, service: claims.sub };
 };
 
-const readJson = async (c: Context): Promise<unknown> => {
-  try {
-    return await c.req.json();
-  } catch {
-    throw new ApiError(
-      400,
-      "malformed_request",
-      "Malformed request",
-      "The body must be JSON.",
-    );
-  }
-};
-
 /** The Cloud routes, mounted on the internal app (routes/internal.ts). */
 export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
   const app = new Hono();
@@ -105,10 +91,7 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
   const holderOf = (c: Context): string => {
     const holder = PinHolderSchema.safeParse(c.req.param("holder"));
     if (!holder.success) {
-      throw new ApiError(
-        422,
-        "validation_error",
-        "Validation failed",
+      throw validationFailed(
         "holder: letters, digits and . _ : @ - (e.g. inference:version:<id>).",
       );
     }
@@ -237,12 +220,7 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
     );
     const parsed = StateSchema.safeParse(await readJson(c));
     if (!parsed.success) {
-      throw new ApiError(
-        422,
-        "validation_error",
-        "Validation failed",
-        "state: one of active, suspended, deleted.",
-      );
+      throw validationFailed("state: one of active, suspended, deleted.");
     }
     const record = await workspaces.set(workspaceId, parsed.data.state);
     if (record.state !== parsed.data.state) {

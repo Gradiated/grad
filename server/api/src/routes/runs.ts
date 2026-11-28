@@ -9,7 +9,6 @@ import {
   PlanRunRequestSchema,
   PlanRunResponseSchema,
   ResumeRunRequestSchema,
-  RUN_EVENT_TYPES,
   RunEventsPageSchema,
   RunSchema,
 } from "../contracts.js";

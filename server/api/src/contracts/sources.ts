@@ -131,8 +131,6 @@ export const SourceProviderSchema = z
   })
   .openapi("SourceProvider");
 
-export type SourceProviderInput = z.infer<typeof SourceProviderSchema>;
-
 const ScheduleSchema = z
   .string()
   .min(1)

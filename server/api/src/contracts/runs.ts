@@ -306,8 +306,6 @@ export const ResolvedAdapterSchema = z.union([
   z.object({ kind: z.literal("encoder_full") }),
 ]);
 
-export type ResolvedAdapter = z.infer<typeof ResolvedAdapterSchema>;
-
 export const BaseArtifactSchema = z
   .object({
     id: z.string().min(1),

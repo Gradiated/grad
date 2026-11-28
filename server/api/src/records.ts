@@ -457,7 +457,7 @@ export const assessRecipeUsability = (
   records.forEach((r, index) => {
     let ok = false;
     let reason = "";
-    if (kind === "sft" || kind === "grpo") {
+    if (kind === "sft") {
       const conversation = recordConversation(r);
       ok = hasAssistantTarget(conversation);
       if (!ok) {

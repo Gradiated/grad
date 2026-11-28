@@ -8,7 +8,6 @@ import {
   ObjectIntegrityError,
   ObjectNotFoundError,
   validateObjectKey,
-  type ObjectStore,
 } from "../src/storage/types.js";
 import { s3Store, s3Target } from "./fixtures/s3.js";
 

@@ -7,6 +7,7 @@ import {
   type RecipeKind,
   type TrainableModel,
 } from "./contracts.js";
+import { issuesOf } from "./errors.js";
 
 /**
  * `chars_per_token`: the base tokenizer's average characters per token on chat
@@ -213,9 +214,7 @@ const parseJsonEnv = <T>(
   }
   const parsed = z.array(schema).safeParse(raw);
   if (!parsed.success) {
-    throw new Error(
-      `${name} is invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
+    throw new Error(`${name} is invalid: ${issuesOf(parsed.error)}`);
   }
 
   return parsed.data;

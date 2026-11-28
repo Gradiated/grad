@@ -5,7 +5,12 @@ import type { Clock } from "../clock.js";
 import { ApiError, errorMessage } from "../errors.js";
 import { metrics } from "../telemetry/metrics.js";
 import type { AuthView, AuthViewRow } from "./auth-view.js";
-import { looksLikeJwt, type JwtClaims, type JwtVerifier } from "./jwt.js";
+import {
+  authUnavailable,
+  looksLikeJwt,
+  type JwtClaims,
+  type JwtVerifier,
+} from "./jwt.js";
 import {
   authenticateWorkerFirst,
   type WorkerAuthenticator,
@@ -46,14 +51,6 @@ const keySuspended = () =>
     "workspace_suspended",
     "Forbidden",
     "This API key's organization or workspace is suspended, or its creator is no longer an active member.",
-  );
-
-const authUnavailable = (detail: string) =>
-  new ApiError(
-    503,
-    "auth_unavailable",
-    "Authentication service unavailable",
-    detail,
   );
 
 /** A console JWT's principal: a member of `ws` with `role`; service tokens are internal only. */

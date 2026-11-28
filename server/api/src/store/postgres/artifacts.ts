@@ -8,6 +8,25 @@ import { first, listNewest, nowIso } from "./shared.js";
 
 const UNEXPIRED = "(expires_at IS NULL OR expires_at > $NOW::timestamptz)";
 
+/** Serializes deletes (exclusive) with commits of the same bundle (shared). */
+const lockBlob = async (db: Db, key: string, mode: "shared" | "exclusive") => {
+  await db.query(
+    mode === "shared"
+      ? "SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))"
+      : "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+    [`blob:${key}`],
+  );
+};
+
+const pinsOf = async (db: Db, workspaceId: string, artifactId: string) =>
+  (
+    await db.query(
+      `SELECT * FROM grad_artifact_pins WHERE workspace_id = $1 AND artifact_id = $2
+       ORDER BY created_at, holder`,
+      [workspaceId, artifactId],
+    )
+  ).map(toArtifactPin);
+
 export const createArtifactRepository = (
   db: Db,
   clock: Clock,
@@ -255,22 +274,8 @@ export const createArtifactRepository = (
         [workspaceId, artifactId, holder],
       )
     ).length > 0,
-  lockBlob: async (key, mode) => {
-    await db.query(
-      mode === "shared"
-        ? "SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))"
-        : "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-      [`blob:${key}`],
-    );
-  },
-  pins: async (workspaceId, artifactId) =>
-    (
-      await db.query(
-        `SELECT * FROM grad_artifact_pins WHERE workspace_id = $1 AND artifact_id = $2
-         ORDER BY created_at, holder`,
-        [workspaceId, artifactId],
-      )
-    ).map(toArtifactPin),
+  lockBlob: (key, mode) => lockBlob(db, key, mode),
+  pins: (workspaceId, artifactId) => pinsOf(db, workspaceId, artifactId),
   deleteRelease: (workspaceId, id) =>
     db.atomic(async () => {
       // The row lock serializes with a concurrent pin (its FK check takes a
@@ -284,19 +289,11 @@ export const createArtifactRepository = (
         ),
       );
       if (!row) return null;
-      const pins = (
-        await db.query(
-          `SELECT * FROM grad_artifact_pins WHERE workspace_id = $1 AND artifact_id = $2
-           ORDER BY created_at, holder`,
-          [workspaceId, id],
-        )
-      ).map(toArtifactPin);
+      const pins = await pinsOf(db, workspaceId, id);
       if (pins.length > 0) return { pins, orphanKey: null };
       // Before the reference check: a release being created on the same
       // bundle (it holds the lock shared) commits first and is seen below.
-      await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        `blob:${row.storage_key}`,
-      ]);
+      await lockBlob(db, row.storage_key, "exclusive");
       await db.query(
         "DELETE FROM grad_artifacts WHERE kind = 'release' AND workspace_id = $1 AND id = $2",
         [workspaceId, id],

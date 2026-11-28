@@ -58,8 +58,6 @@ export const PageQuerySchema = z.object({
   cursor: z.string().min(1).max(512).optional(),
 });
 
-export type PageQuery = z.infer<typeof PageQuerySchema>;
-
 export const NextCursorSchema = z.string().nullable().openapi({
   description:
     "Pass back as `cursor` for the next page; null on the last page (every list endpoint).",

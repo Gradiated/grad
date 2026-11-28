@@ -49,6 +49,26 @@ export const forbidden = (code: string, detail: string): ApiError =>
 export const unavailable = (code: string, detail: string): ApiError =>
   new ApiError(501, code, "Not available on this server", detail);
 
+export const unauthorized = (detail: string): ApiError =>
+  new ApiError(401, "unauthorized", "Authentication required", detail);
+
+export const validationFailed = (detail: string): ApiError =>
+  new ApiError(422, "validation_error", "Validation failed", detail);
+
+/** A zod error's issues as `path: message; ...` (`root` names an empty path). */
+export const issuesOf = (
+  error: { issues: ReadonlyArray<{ path: PropertyKey[]; message: string }> },
+  root = "",
+): string =>
+  error.issues
+    .slice(0, 20)
+    .map((i) => `${i.path.map(String).join(".") || root}: ${i.message}`)
+    .join("; ");
+
+/** The token of an `Authorization: Bearer <token>` header. */
+export const parseBearer = (header: string | undefined): string | undefined =>
+  header?.match(/^Bearer\s+(\S+)$/i)?.[1];
+
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 

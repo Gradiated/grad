@@ -24,15 +24,15 @@ import type {
 import type { Row } from "./db.js";
 
 /** One place for pg → domain coercion (BIGINT strings, Dates, jsonb). */
-const s = (v: unknown): string => String(v);
-const sn = (v: unknown): string | null =>
+export const s = (v: unknown): string => String(v);
+export const sn = (v: unknown): string | null =>
   v === null || v === undefined ? null : String(v);
-const n = (v: unknown): number => Number(v ?? 0);
-const nn = (v: unknown): number | null =>
+export const n = (v: unknown): number => Number(v ?? 0);
+export const nn = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v);
-const iso = (v: unknown): string =>
+export const iso = (v: unknown): string =>
   v instanceof Date ? v.toISOString() : new Date(String(v)).toISOString();
-const isoN = (v: unknown): string | null =>
+export const isoN = (v: unknown): string | null =>
   v === null || v === undefined ? null : iso(v);
 const j = <T>(v: unknown, fallback: T): T =>
   v === null || v === undefined ? fallback : (v as T);

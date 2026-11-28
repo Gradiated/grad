@@ -6,14 +6,18 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 
 import type { AppDependencies } from "./deps.js";
-import { ApiError } from "./errors.js";
+import { ApiError, issuesOf, parseBearer, validationFailed } from "./errors.js";
 import { largeBodyGate, unauthenticatedGuard } from "./http-guards.js";
 import { documentIdempotencyHeader } from "./idempotency.js";
 import { registerArtifactRoutes } from "./routes/artifacts.js";
 import { registerCheckpointRoutes } from "./routes/checkpoints.js";
 import { registerDatasetRoutes } from "./routes/datasets.js";
 import { registerEvalRoutes } from "./routes/evals.js";
-import { problemBody, requireScope, type AppEnv } from "./routes/helpers.js";
+import {
+  problemResponse as problemJson,
+  requireScope,
+  type AppEnv,
+} from "./routes/helpers.js";
 import { registerModelsAndKeysRoutes } from "./routes/keys.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerSourceRoutes } from "./routes/sources.js";
@@ -63,9 +67,6 @@ const workerAuthMode = (identity: string): string =>
       ? "lease"
       : "static";
 
-const parseBearer = (header: string | undefined): string | undefined =>
-  header?.match(/^Bearer\s+(\S+)$/i)?.[1];
-
 const problemResponse = (
   c: Context<AppEnv>,
   status: number,
@@ -73,24 +74,7 @@ const problemResponse = (
   title: string,
   detail: string,
 ): Response =>
-  new Response(
-    JSON.stringify(
-      problemBody(
-        status,
-        code,
-        title,
-        detail,
-        c.get("requestId") ?? "req_unknown",
-      ),
-    ),
-    {
-      status,
-      headers: {
-        "Content-Type": "application/problem+json",
-        "x-request-id": c.get("requestId") ?? "req_unknown",
-      },
-    },
-  );
+  problemJson(c.get("requestId") ?? "req_unknown", status, code, title, detail);
 
 export interface GradApp {
   app: OpenAPIHono<AppEnv>;
@@ -103,15 +87,7 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result) => {
       if (!result.success) {
-        throw new ApiError(
-          422,
-          "validation_error",
-          "Validation failed",
-          result.error.issues
-            .slice(0, 20)
-            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
-            .join("; "),
-        );
+        throw validationFailed(issuesOf(result.error, "body"));
       }
 
       return undefined;

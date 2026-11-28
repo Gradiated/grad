@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { Hono, MiddlewareHandler } from "hono";
 
+import { parseBearer } from "../errors.js";
 import { registry } from "./metrics.js";
 import type { TelemetrySampler } from "./sampler.js";
 
@@ -21,9 +22,7 @@ const bearer = (token: string | undefined): MiddlewareHandler => {
 
   return async (c, next) => {
     if (expected) {
-      const sent = c.req
-        .header("authorization")
-        ?.match(/^Bearer\s+(\S+)$/i)?.[1];
+      const sent = parseBearer(c.req.header("authorization"));
       if (!sent || !timingSafeEqual(digest(sent), expected)) {
         return c.text("unauthorized\n", 401, {
           "WWW-Authenticate": 'Bearer realm="metrics"',

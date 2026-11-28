@@ -8,17 +8,8 @@ import type {
   SourceRepository,
 } from "../types.js";
 import { Params, setClause, type Db, type Row } from "./db.js";
+import { iso, isoN, nn, sn } from "./mappers.js";
 import { first, listNewest, nowIso } from "./shared.js";
-
-const iso = (v: unknown): string =>
-  v instanceof Date ? v.toISOString() : new Date(String(v)).toISOString();
-const isoN = (v: unknown): string | null =>
-  v === null || v === undefined ? null : iso(v);
-const sn = (v: unknown): string | null =>
-  v === null || v === undefined ? null : String(v);
-
-const nn = (v: unknown): number | null =>
-  v === null || v === undefined ? null : Number(v);
 
 const toSecret = (r: Row): Secret & { id: string } => ({
   id: String(r.id),

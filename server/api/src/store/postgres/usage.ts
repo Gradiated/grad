@@ -3,7 +3,7 @@ import type { UsageGroupBy, UsageSummary } from "../../contracts.js";
 import { decodeCursor, toPage } from "../cursor.js";
 import type { UsageRepository } from "../types.js";
 import { Params, type Db } from "./db.js";
-import { toLedgerRow, toUsage } from "./mappers.js";
+import { n as num, toLedgerRow, toUsage } from "./mappers.js";
 import { first, nowIso } from "./shared.js";
 
 /**
@@ -67,8 +67,6 @@ const topRefs = (where: string) => `(
     FROM u WHERE ${where} GROUP BY ref_id, ref_name, usage_kind
     ORDER BY cost_usd DESC, ref_id LIMIT 5
   ) t)`;
-
-const num = (v: unknown): number => Number(v ?? 0);
 
 interface SumRow {
   tokens: unknown;

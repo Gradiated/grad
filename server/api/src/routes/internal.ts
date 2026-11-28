@@ -23,14 +23,20 @@ import {
   type TrainerKey,
 } from "../adapters.js";
 import type { Clock } from "../clock.js";
-import { ApiError } from "../errors.js";
+import {
+  ApiError,
+  issuesOf,
+  parseBearer,
+  unauthorized,
+  validationFailed,
+} from "../errors.js";
 import type { WorkerTokenRepository } from "../store/types.js";
 import { log } from "../telemetry/log.js";
 import {
   MAX_LEASE_TOKEN_SECONDS,
   newLeaseToken,
 } from "../worker-auth/lease.js";
-import { problemBody } from "./helpers.js";
+import { problemResponse, readJson } from "./helpers.js";
 import {
   createCloudInternalRoutes,
   type CloudInternalDeps,
@@ -58,24 +64,13 @@ const problem = (
   c: Context<InternalEnv>,
   error: Pick<ApiError, "status" | "code" | "title" | "detail">,
 ): Response =>
-  new Response(
-    JSON.stringify(
-      problemBody(
-        error.status,
-        error.code,
-        error.title,
-        error.detail,
-        c.get("requestId") ?? "req_unknown",
-      ),
-    ),
-    {
-      status: error.status,
-      headers: { "Content-Type": "application/problem+json" },
-    },
+  problemResponse(
+    c.get("requestId") ?? "req_unknown",
+    error.status,
+    error.code,
+    error.title,
+    error.detail,
   );
-
-const invalid = (detail: string) =>
-  new ApiError(422, "validation_error", "Validation failed", detail);
 
 export const createInternalApp = (deps: {
   tokens: WorkerTokenRepository;
@@ -132,15 +127,10 @@ export const createInternalApp = (deps: {
     c: Context<InternalEnv>,
     next: () => Promise<void>,
   ) => {
-    const token = c.req
-      .header("authorization")
-      ?.match(/^Bearer\s+(\S+)$/i)?.[1];
+    const token = parseBearer(c.req.header("authorization"));
     const key = token ? findKeyByToken(token, deps.orchestratorKeys) : null;
     if (!key) {
-      throw new ApiError(
-        401,
-        "unauthorized",
-        "Authentication required",
+      throw unauthorized(
         "Internal routes need an orchestrator key (GRAD_ORCHESTRATOR_KEYS_JSON) as 'Authorization: Bearer <key>'.",
       );
     }
@@ -155,24 +145,9 @@ export const createInternalApp = (deps: {
   app.use("/internal/v1/worker-tokens/*", orchestratorOnly);
   app.post("/internal/v1/worker-tokens", async (c) => {
     const orchestrator = c.get("orchestrator");
-    let json: unknown;
-    try {
-      json = await c.req.json();
-    } catch {
-      throw new ApiError(
-        400,
-        "malformed_request",
-        "Malformed request",
-        "The body must be JSON.",
-      );
-    }
-    const parsed = MintWorkerTokenSchema.safeParse(json);
+    const parsed = MintWorkerTokenSchema.safeParse(await readJson(c));
     if (!parsed.success) {
-      throw invalid(
-        parsed.error.issues
-          .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
-          .join("; "),
-      );
+      throw validationFailed(issuesOf(parsed.error, "body"));
     }
     const input = parsed.data;
     const denied = input.kinds.filter((k) => !orchestrator.kinds.includes(k));
@@ -187,9 +162,11 @@ export const createInternalApp = (deps: {
     const now = deps.clock.now();
     const expiresAt = new Date(input.expires_at);
     const seconds = (expiresAt.getTime() - now.getTime()) / 1000;
-    if (seconds <= 0) throw invalid("expires_at: must be in the future.");
+    if (seconds <= 0) {
+      throw validationFailed("expires_at: must be in the future.");
+    }
     if (seconds > MAX_LEASE_TOKEN_SECONDS) {
-      throw invalid(
+      throw validationFailed(
         `expires_at: at most ${MAX_LEASE_TOKEN_SECONDS / 86_400} days ahead; mint a new token to extend a lease.`,
       );
     }
@@ -230,7 +207,9 @@ export const createInternalApp = (deps: {
   app.delete("/internal/v1/worker-tokens/:lease_id", async (c) => {
     const orchestrator = c.get("orchestrator");
     const leaseId = c.req.param("lease_id");
-    if (!LEASE_ID_RE.test(leaseId)) throw invalid("lease_id: invalid.");
+    if (!LEASE_ID_RE.test(leaseId)) {
+      throw validationFailed("lease_id: invalid.");
+    }
     const revoked = await deps.tokens.revokeLease(
       leaseId,
       `orchestrator:${orchestrator.label}`,

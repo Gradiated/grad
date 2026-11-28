@@ -5,6 +5,7 @@ import {
   type TrainerKey,
   type WorkerJobKind,
 } from "../adapters.js";
+import { issuesOf } from "../errors.js";
 import { WORKER_AUTH_MODES, type WorkerAuthMode } from "./principal.js";
 
 export interface WorkerAuthConfig {
@@ -42,9 +43,7 @@ const parseJson = <T>(
   }
   const parsed = schema.safeParse(json);
   if (!parsed.success) {
-    throw new Error(
-      `Invalid ${name}: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
+    throw new Error(`Invalid ${name}: ${issuesOf(parsed.error)}`);
   }
 
   return parsed.data;

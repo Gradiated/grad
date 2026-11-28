@@ -47,7 +47,6 @@ import { assertNonEmptyPlan, planEvalRequest } from "./evals/planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import { ObjectNotFoundError } from "../storage/types.js";
 import type {
-  ArtifactRecord,
   CheckpointRecord,
   DatasetVersion,
   IdempotencyInput,

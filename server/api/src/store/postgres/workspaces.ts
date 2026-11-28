@@ -5,20 +5,18 @@ import type {
   WorkspaceStateRecord,
 } from "../types.js";
 import type { Db, Row } from "./db.js";
+import { iso, isoN } from "./mappers.js";
 import { first } from "./shared.js";
 
 const PAUSED_REASON = "workspace_suspended";
 
-const iso = (v: unknown): string | null =>
-  v === null || v === undefined ? null : new Date(v as string).toISOString();
-
 const toState = (r: Row): WorkspaceStateRecord => ({
   workspace_id: String(r.workspace_id),
   state: String(r.state) as WorkspaceStateName,
-  purge_after: iso(r.purge_after),
-  purged_at: iso(r.purged_at),
+  purge_after: isoN(r.purge_after),
+  purged_at: isoN(r.purged_at),
   last_error: r.last_error === null ? null : String(r.last_error),
-  updated_at: iso(r.updated_at) as string,
+  updated_at: iso(r.updated_at),
 });
 
 const count = async (db: Db, sql: string, params: unknown[]) =>
@@ -127,21 +125,13 @@ export const createWorkspaceRepository = (db: Db): WorkspaceRepository => ({
     db.atomic(async () => {
       const ws = [workspaceId];
       let rows = 0;
-      rows += await deleted(
-        db,
-        "DELETE FROM grad_sources WHERE workspace_id = $1 RETURNING 1",
-        ws,
-      );
-      rows += await deleted(
-        db,
-        "DELETE FROM grad_secrets WHERE workspace_id = $1 RETURNING 1",
-        ws,
-      );
-      rows += await deleted(
-        db,
-        "DELETE FROM grad_api_keys WHERE workspace_id = $1 RETURNING 1",
-        ws,
-      );
+      for (const table of ["grad_sources", "grad_secrets", "grad_api_keys"]) {
+        rows += await deleted(
+          db,
+          `DELETE FROM ${table} WHERE workspace_id = $1 RETURNING 1`,
+          ws,
+        );
+      }
       // Finished jobs, with their runs, evals, outputs, events and staged
       // parts (ON DELETE CASCADE); a running job waits for its stop.
       rows += await deleted(
