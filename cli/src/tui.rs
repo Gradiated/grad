@@ -2099,7 +2099,7 @@ async fn pump_poll(c: Client, id: String, tx: UnboundedSender<Msg>, polling: Arc
                     }
                 }
                 let terminal = r.status.is_terminal();
-                let refresh = i % 3 == 0 || terminal;
+                let refresh = i.is_multiple_of(3) || terminal;
                 if tx.send(Msg::Run(Box::new(r))).is_err() {
                     return;
                 }

@@ -4,7 +4,7 @@ version = "0.2.0-alpha.7"
 edition = "2021"
 license = "MIT"
 description = "CLI for the Gradiated training and serving platform"
-rust-version = "1.82"
+rust-version = "1.88"
 repository = "https://github.com/Gradiated/grad"
 homepage = "https://gradiated.com/docs/training/"
 keywords = ["llm", "fine-tuning", "lora", "cli", "gradiated"]
@@ -18,12 +18,12 @@ path = "src/main.rs"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
-crossterm = "=0.28.1"
+crossterm = "=0.29.0"
 getrandom = "0.2"
 # Imported as `grad_sdk` inside the CLI so it never clashes with the `grad` binary.
 grad_sdk = { package = "grad-sdk", path = "../sdks/rust", version = "=0.2.0-alpha.7" }
 hex = "0.4"
-ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm"] }
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
