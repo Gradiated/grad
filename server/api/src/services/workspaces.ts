@@ -92,10 +92,12 @@ export const createWorkspaceLifecycle = (
   ): Promise<number> => {
     // Listed without the trailing slash (object keys have no empty
     // segment), so keep only this workspace's keys, not `ws/<ws>x/`.
+    // Kept (pinned) objects count against the page, so list past them: else
+    // a workspace whose first PURGE_PAGE keys are all pinned never purges.
     const keys = await storage.listOlder(
       prefix.slice(0, -1),
       addSeconds(clock.now(), 86_400),
-      PURGE_PAGE,
+      PURGE_PAGE + keep.size,
     );
     const doomed = keys.filter((k) => k.startsWith(prefix) && !keep.has(k));
     for (const key of doomed) await storage.delete(key);
