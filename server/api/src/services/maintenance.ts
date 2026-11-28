@@ -16,6 +16,9 @@ import type { WorkspaceLifecycle } from "./workspaces.js";
 
 /** Keys checked per tick while a pass over the bucket is in progress. */
 const ORPHAN_PAGE = 1000;
+/** Job events deleted per statement, and statements per tick. */
+const EVENT_GC_BATCH = 5000;
+const EVENT_GC_BATCHES = 10;
 /** A finished pass waits this long before the next one starts. */
 const ORPHAN_PASS_INTERVAL_MS = 3_600_000;
 /** Swept for orphans: job blobs under `ws/`, released bundles under `artifacts/`. */
@@ -121,6 +124,25 @@ export const createMaintenance = (
     return deleted;
   };
 
+  /**
+   * Job events past retention, EVENT_GC_BATCH at a time and at most
+   * EVENT_GC_BATCHES batches a tick: 50k a tick keeps up with ~3k events/s
+   * at the default 15 s interval (one batch of 1000 kept up with 66/s).
+   */
+  const deleteOldEvents = async (before: Date): Promise<number> => {
+    let deleted = 0;
+    for (let i = 0; i < EVENT_GC_BATCHES; i += 1) {
+      const n = await deps.store.jobs.deleteEventsBefore(
+        before,
+        EVENT_GC_BATCH,
+      );
+      deleted += n;
+      if (n < EVENT_GC_BATCH) break;
+    }
+
+    return deleted;
+  };
+
   /** One step's failure (an S3 outage, say) is logged and never stops the others. */
   const step = async (name: string, fn: () => Promise<number>) => {
     const start = performance.now();
@@ -159,10 +181,7 @@ export const createMaintenance = (
         services.uploads.sweepStaging(now),
       ),
       deletedEvents: await step("gc_job_events", () =>
-        deps.store.jobs.deleteEventsBefore(
-          addSeconds(now, -retentionDays * 86_400),
-          1000,
-        ),
+        deleteOldEvents(addSeconds(now, -retentionDays * 86_400)),
       ),
       deletedOrphanBlobs: await step("gc_orphan_blobs", () =>
         sweepOrphanBlobs(now),

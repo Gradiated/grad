@@ -6,6 +6,7 @@ import {
   stagingKey,
 } from "../src/services/uploads.js";
 import { makeTestApp, WORKSPACE_A, type TestApp } from "./fixtures/app.js";
+import { sql } from "./fixtures/postgres.js";
 import {
   createSftRun,
   FakeWorker,
@@ -225,5 +226,19 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
       (await t.json<{ data: unknown[] }>(`/v1/runs/${run.id}/metrics`)).body
         .data,
     ).toEqual([]);
+  });
+
+  it("one tick deletes a backlog of expired job events far past one batch", async () => {
+    const run = await createSftRun(t);
+    // 12k metrics past retention (a fleet writes thousands a minute).
+    await sql(
+      `INSERT INTO grad_job_events (job_id, attempt, type, step, key, payload, created_at)
+       SELECT $1, 1, 'metric', s, s::text, '{}'::jsonb, now() - interval '100 days'
+       FROM generate_series(1, 12000) s`,
+      [run.id],
+    );
+
+    const report = await t.services.maintenance.tick();
+    expect(report.deletedEvents).toBe(12_000);
   });
 });
