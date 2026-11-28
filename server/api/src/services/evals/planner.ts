@@ -148,7 +148,6 @@ const resolveJudgeTargets = async (
 };
 
 interface BuiltTasks {
-  tasks: EvalTask[];
   count: number;
   skipped: number;
   alreadyScored: number;
@@ -215,7 +214,6 @@ const addTask = (
 };
 
 const noTasks = (): BuiltTasks => ({
-  tasks: [],
   count: 0,
   skipped: 0,
   alreadyScored: 0,
@@ -223,33 +221,31 @@ const noTasks = (): BuiltTasks => ({
   referenceTokens: 0,
 });
 
-/** An eval's tasks: the usable records of its pinned dataset version, in order. */
-export const buildTasks = (
-  records: readonly DatasetRecord[],
+/**
+ * An eval's tasks: the usable records of its pinned dataset version, in
+ * order, as they stream in (the first `limit`); `built` counts them.
+ */
+export async function* evalTasks(
+  records: AsyncIterable<DatasetRecord>,
   limit: number | undefined,
   score: readonly string[] | null,
-): BuiltTasks => {
-  const built = noTasks();
-  for (const record of records) {
-    if (limit !== undefined && built.count >= limit) break;
+  built: BuiltTasks = noTasks(),
+): AsyncGenerator<EvalTask> {
+  for await (const record of records) {
+    if (limit !== undefined && built.count >= limit) return;
     const task = addTask(built, record, score);
-    if (task) built.tasks.push(task);
+    if (task) yield task;
   }
+}
 
-  return built;
-};
-
-/** `buildTasks` without the tasks: counts and token sums, streamed (a plan keeps no records). */
+/** `evalTasks` counted: a plan keeps no records. */
 const countTasks = async (
   records: AsyncIterable<DatasetRecord>,
   limit: number | undefined,
   score: readonly string[] | null,
 ): Promise<BuiltTasks> => {
   const built = noTasks();
-  for await (const record of records) {
-    if (limit !== undefined && built.count >= limit) break;
-    addTask(built, record, score);
-  }
+  for await (const _ of evalTasks(records, limit, score, built));
 
   return built;
 };

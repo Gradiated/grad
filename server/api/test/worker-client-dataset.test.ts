@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { gzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
+import type { DatasetRecord } from "../src/contracts.js";
 import { ServerUnavailable, createWorkerClient } from "../src/worker/client.js";
+import { openDownloadedVersion } from "../src/worker/dataset-file.js";
 
 /** A fetch that serves `chunks` as the body, then errors when `fail` is set. */
 const serving =
@@ -29,6 +34,12 @@ const client = (fetchImpl: typeof globalThis.fetch) =>
     timeoutMs: 2_000,
   });
 
+const collect = async (lines: AsyncIterable<string>) => {
+  const out: string[] = [];
+  for await (const line of lines) out.push(line);
+  return out;
+};
+
 const part = (from: number, n: number) =>
   gzipSync(
     Array.from(
@@ -47,24 +58,28 @@ describe("eval worker dataset download", () => {
     for (let at = 0; at < body.length; at += 65_536) {
       chunks.push(body.subarray(at, at + 65_536));
     }
-    const records = await client(serving(chunks)).datasetRecords(
-      "/v1/trainer-jobs/j/dataset",
+    const lines = await collect(
+      client(serving(chunks)).datasetLines("/v1/trainer-jobs/j/dataset"),
     );
-    expect(records).toHaveLength(40_005);
-    expect(records.at(-1)?.id).toBe("r40004");
+    expect(lines).toHaveLength(40_005);
+    expect(JSON.parse(lines.at(-1) as string).id).toBe("r40004");
   });
 
   it("hands back on a gzip stream cut short or a connection dropped mid-body", async () => {
     const whole = part(0, 1000);
     await expect(
-      client(serving([whole.subarray(0, whole.length - 100)])).datasetRecords(
-        "/d",
+      collect(
+        client(serving([whole.subarray(0, whole.length - 100)])).datasetLines(
+          "/d",
+        ),
       ),
     ).rejects.toBeInstanceOf(ServerUnavailable);
     await expect(
-      client(
-        serving([whole.subarray(0, 500)], new TypeError("terminated")),
-      ).datasetRecords("/d"),
+      collect(
+        client(
+          serving([whole.subarray(0, 500)], new TypeError("terminated")),
+        ).datasetLines("/d"),
+      ),
     ).rejects.toBeInstanceOf(ServerUnavailable);
   });
 
@@ -82,20 +97,57 @@ describe("eval worker dataset download", () => {
       );
     const started = Date.now();
     await expect(
-      createWorkerClient({
-        serverUrl: "http://grad.test",
-        workerId: "w",
-        fetch: stall,
-        retryDelaysMs: [],
-        timeoutMs: 200,
-      }).datasetRecords("/d"),
+      collect(
+        createWorkerClient({
+          serverUrl: "http://grad.test",
+          workerId: "w",
+          fetch: stall,
+          retryDelaysMs: [],
+          timeoutMs: 200,
+        }).datasetLines("/d"),
+      ),
     ).rejects.toBeInstanceOf(ServerUnavailable);
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
-  it("fails the eval on a line that is not JSON", async () => {
+  it("fails the eval on a line that is not JSON, and leaves no file behind", async () => {
+    const before = (await readdir(tmpdir())).filter((f) =>
+      f.startsWith("grad-eval-"),
+    );
     await expect(
-      client(serving([gzipSync("{not json}\n")])).datasetRecords("/d"),
+      openDownloadedVersion(
+        client(serving([gzipSync('{"id":"a"}\n{not json}\n')])).datasetLines(
+          "/d",
+        ),
+      ),
     ).rejects.toBeInstanceOf(SyntaxError);
+    expect(
+      (await readdir(tmpdir())).filter((f) => f.startsWith("grad-eval-")),
+    ).toEqual(before);
+  });
+
+  it("pages the downloaded version's merge across chunks, like mergeRecords", async () => {
+    const cases = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../trainer/tests/fixtures/merge_parity.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as Array<{ parts: DatasetRecord[][]; merged: DatasetRecord[] }>;
+    for (const { parts, merged } of cases) {
+      const lines = parts.flat().map((r) => JSON.stringify(r));
+      const version = await openDownloadedVersion(
+        (async function* () {
+          yield* lines;
+        })(),
+        7,
+      );
+      const records: DatasetRecord[] = [];
+      for await (const record of version.records()) records.push(record);
+      await version.close();
+      expect(records).toEqual(merged);
+    }
   });
 });

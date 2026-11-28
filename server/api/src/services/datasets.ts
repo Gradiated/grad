@@ -27,6 +27,7 @@ import {
   createPartLinesCache,
   createVersionIndexCache,
   readVersionPage,
+  storedPartLines,
   type VersionIndex,
 } from "./dataset-pages.js";
 import { writeRecordsPart } from "./dataset-records.js";
@@ -167,7 +168,7 @@ const FILTER_PART_RECORDS = 20_000;
 export const createDatasetService = (deps: AppDependencies): DatasetService => {
   const { store, storage } = deps;
   const indexes = createVersionIndexCache(storage);
-  const partLines = createPartLinesCache(storage);
+  const partLines = createPartLinesCache(storedPartLines(storage));
 
   const get = async (workspaceId: string, name: string): Promise<Dataset> => {
     const dataset = await store.datasets.get(workspaceId, name);
@@ -192,7 +193,7 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
     index: VersionIndex,
     from: number,
     limit: number,
-  ) => readVersionPage(storage, version.parts, index, from, limit, partLines);
+  ) => readVersionPage(partLines, version.parts, index, from, limit);
 
   async function* records(
     version: DatasetVersion,
@@ -272,12 +273,11 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
     // One page without loading the version (dataset-pages.ts).
     const index = await indexes.get(version);
     const data = await readVersionPage(
-      storage,
+      partLines,
       version.parts,
       index,
       offset,
       input.limit,
-      partLines,
     );
     const nextOffset = offset + data.length;
 

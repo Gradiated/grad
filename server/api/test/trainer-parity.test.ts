@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import type { ChatMessage, DatasetRecord } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
+import type { DatasetPart } from "../src/store/types.js";
 import {
   routerGroupKey,
   splitForRecipe,
@@ -15,6 +16,7 @@ import {
   finishIndex,
   newIndexBuilder,
   readVersionPage,
+  storedPartLines,
 } from "../src/services/dataset-pages.js";
 import { writeRecordsPart } from "../src/services/dataset-records.js";
 import { mergeRecords } from "../src/services/record-merge.js";
@@ -72,7 +74,8 @@ describe("trainer parity", () => {
       // The page index, built part by part like successive pushes: every
       // prefix pages exactly what mergeRecords makes of it.
       const stored = [];
-      const builder = newIndexBuilder();
+      const builder = newIndexBuilder<DatasetPart>();
+      const lines = storedPartLines(s3.storage);
       for (const [k, records] of parts.entries()) {
         stored.push(
           await writeRecordsPart(
@@ -81,7 +84,7 @@ describe("trainer parity", () => {
             records,
           ),
         );
-        await extendIndex(s3.storage, builder, stored.slice(k));
+        await extendIndex(lines, builder, stored.slice(k));
         const index = finishIndex(builder);
         const expected = mergeRecords(parts.slice(0, k + 1).flat());
         expect(index.total).toBe(expected.length);
@@ -89,13 +92,7 @@ describe("trainer parity", () => {
           const pages: DatasetRecord[] = [];
           for (let from = 0; from < index.total; from += limit) {
             pages.push(
-              ...(await readVersionPage(
-                s3.storage,
-                stored,
-                index,
-                from,
-                limit,
-              )),
+              ...(await readVersionPage(lines, stored, index, from, limit)),
             );
           }
           expect(pages).toEqual(expected);

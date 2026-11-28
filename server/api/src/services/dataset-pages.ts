@@ -61,9 +61,22 @@ const indexBytes = (index: VersionIndex): number =>
  * new version's index without re-reading the old parts (a push or a sync
  * reads only what it added, not the dataset).
  */
-export interface IndexBuilder {
+/**
+ * A part's JSONL lines. Parts are a version's stored parts on the server
+ * (`storedPartLines`) and runs of a downloaded version's lines in the eval
+ * worker: anything with a key whose lines don't change.
+ */
+export type PartLines<P> = (part: P) => Promise<string[]>;
+
+/** The lines of a version's stored parts. */
+export const storedPartLines =
+  (storage: ObjectStore): PartLines<DatasetPart> =>
+  async (part) =>
+    partLines(await readPart(storage, part), part);
+
+export interface IndexBuilder<P> {
   /** Parts folded in so far (a prefix of every version built from it). */
-  parts: DatasetPart[];
+  parts: P[];
   lineSlots: number[];
   partStarts: number[];
   slotOf: Map<string, number>;
@@ -76,7 +89,7 @@ export interface IndexBuilder {
   next: number;
 }
 
-export const newIndexBuilder = (): IndexBuilder => ({
+export const newIndexBuilder = <P>(): IndexBuilder<P> => ({
   parts: [],
   lineSlots: [],
   partStarts: [],
@@ -88,17 +101,17 @@ export const newIndexBuilder = (): IndexBuilder => ({
 });
 
 /** About what a builder holds (ids dominate: a map entry and its key). */
-const builderBytes = (b: IndexBuilder): number =>
+const builderBytes = <P>(b: IndexBuilder<P>): number =>
   b.lineSlots.length * 8 +
   b.slotOf.size * 96 +
   (b.early.size + b.ruled.size + b.earlyFacts.size) * 256;
 
 /** Folds `parts` (the version's parts after `b.parts`) into `b`, in place. */
-export const extendIndex = async (
-  storage: ObjectStore,
-  b: IndexBuilder,
-  parts: readonly DatasetPart[],
-): Promise<IndexBuilder> => {
+export const extendIndex = async <P>(
+  lines: PartLines<P>,
+  b: IndexBuilder<P>,
+  parts: readonly P[],
+): Promise<IndexBuilder<P>> => {
   /**
    * Slots that got a rule while unruled after earlier lines (the line it
    * came at): their earlier facts are folded in by `foldHistory` once the
@@ -134,7 +147,7 @@ export const extendIndex = async (
 
   for (const part of parts) {
     b.partStarts.push(b.lineSlots.length);
-    for (const text of await partLines(await readPart(storage, part), part)) {
+    for (const text of await lines(part)) {
       const at = b.lineSlots.length;
       // Parsing a part is ~100 ms of CPU per 25k records: let requests in.
       if (at % YIELD_LINES === 0) await yieldToEventLoop();
@@ -185,7 +198,7 @@ export const extendIndex = async (
     }
     b.parts.push(part);
   }
-  await foldHistory(storage, b, history);
+  await foldHistory(lines, b, history);
 
   return b;
 };
@@ -196,9 +209,9 @@ export const extendIndex = async (
  * updates that arrived before it, then the rest): one more read of the
  * parts that hold such lines.
  */
-const foldHistory = async (
-  storage: ObjectStore,
-  b: IndexBuilder,
+const foldHistory = async <P>(
+  lines: PartLines<P>,
+  b: IndexBuilder<P>,
   history: ReadonlyMap<number, number>,
 ): Promise<void> => {
   if (history.size === 0) return;
@@ -219,8 +232,7 @@ const foldHistory = async (
     for (let i = start; i < end && !any; i += 1) any = wanted(i);
     if (!any) continue;
 
-    const lines = await partLines(await readPart(storage, part), part);
-    for (const [offset, text] of lines.entries()) {
+    for (const [offset, text] of (await lines(part)).entries()) {
       const i = start + offset;
       if (!wanted(i)) continue;
       const slot = b.lineSlots[i] as number;
@@ -246,7 +258,7 @@ const foldHistory = async (
 };
 
 /** The index of the version `b` has folded in (`b` stays extendable). */
-export const finishIndex = (b: IndexBuilder): VersionIndex => {
+export const finishIndex = <P>(b: IndexBuilder<P>): VersionIndex => {
   const slots = Int32Array.from(b.lineSlots);
   const partStarts = Int32Array.from([...b.partStarts, slots.length]);
 
@@ -269,14 +281,11 @@ export const finishIndex = (b: IndexBuilder): VersionIndex => {
 };
 
 /** Streams `parts` once and plans their merge. */
-export const buildVersionIndex = async (
-  storage: ObjectStore,
-  parts: readonly DatasetPart[],
+export const buildVersionIndex = async <P>(
+  lines: PartLines<P>,
+  parts: readonly P[],
 ): Promise<VersionIndex> =>
-  finishIndex(await extendIndex(storage, newIndexBuilder(), parts));
-
-/** A part's JSONL lines (`createPartLinesCache`, or a fresh read). */
-type PartLines = (part: DatasetPart) => Promise<string[]>;
+  finishIndex(await extendIndex(lines, newIndexBuilder<P>(), parts));
 
 /**
  * A byte-bounded LRU of parts' JSONL lines. A page parses only its own
@@ -284,10 +293,10 @@ type PartLines = (part: DatasetPart) => Promise<string[]>;
  * consecutive pages read the same few parts: caching their text saves a
  * download, a gunzip and a sha256 per page.
  */
-export const createPartLinesCache = (
-  storage: ObjectStore,
+export const createPartLinesCache = <P extends { key: string }>(
+  read: PartLines<P>,
   maxBytes = 128 * 1024 * 1024,
-): PartLines => {
+): PartLines<P> => {
   const cached = new Map<string, { lines: string[]; bytes: number }>();
   let bytes = 0;
 
@@ -298,7 +307,7 @@ export const createPartLinesCache = (
       cached.set(part.key, hit);
       return hit.lines;
     }
-    const lines = await partLines(await readPart(storage, part), part);
+    const lines = await read(part);
     const size = lines.reduce((sum, line) => sum + line.length, 0);
     if (size <= maxBytes) {
       cached.set(part.key, { lines, bytes: size });
@@ -315,14 +324,12 @@ export const createPartLinesCache = (
 };
 
 /** Merged records [from, from + limit) of the version `index` describes. */
-export const readVersionPage = async (
-  storage: ObjectStore,
-  parts: readonly DatasetPart[],
+export const readVersionPage = async <P>(
+  lines: PartLines<P>,
+  parts: readonly P[],
   index: VersionIndex,
   from: number,
   limit: number,
-  lines: PartLines = async (part) =>
-    await partLines(await readPart(storage, part), part),
 ): Promise<DatasetRecord[]> => {
   const to = Math.min(index.total, from + limit);
   if (from >= to) return [];
@@ -380,7 +387,8 @@ export const createVersionIndexCache = (
   maxBuilderBytes = 128 * 1024 * 1024,
 ) => {
   const cached = new Map<string, VersionIndex>();
-  const builders = new Map<string, IndexBuilder>();
+  const lines = storedPartLines(storage);
+  const builders = new Map<string, IndexBuilder<DatasetPart>>();
   const building = new Map<string, Promise<VersionIndex>>();
   let bytes = 0;
 
@@ -396,7 +404,10 @@ export const createVersionIndexCache = (
     }
   };
 
-  const keepBuilder = (key: string, builder: IndexBuilder): void => {
+  const keepBuilder = (
+    key: string,
+    builder: IndexBuilder<DatasetPart>,
+  ): void => {
     if (builderBytes(builder) > maxBuilderBytes) return;
     builders.set(key, builder);
     let total = 0;
@@ -409,7 +420,7 @@ export const createVersionIndexCache = (
   };
 
   /** The longest cached prefix's builder (taken: it is extended in place), or a new one. */
-  const takeBuilder = (keys: readonly string[]): IndexBuilder => {
+  const takeBuilder = (keys: readonly string[]): IndexBuilder<DatasetPart> => {
     for (let k = keys.length - 2; k > 0; k -= 1) {
       const key = keys[k] as string;
       const builder = builders.get(key);
@@ -419,7 +430,7 @@ export const createVersionIndexCache = (
       }
     }
 
-    return newIndexBuilder();
+    return newIndexBuilder<DatasetPart>();
   };
 
   return {
@@ -441,7 +452,7 @@ export const createVersionIndexCache = (
       const build = (async () => {
         const builder = takeBuilder(keys);
         await extendIndex(
-          storage,
+          lines,
           builder,
           version.parts.slice(builder.parts.length),
         );

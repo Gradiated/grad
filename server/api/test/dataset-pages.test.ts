@@ -9,6 +9,7 @@ import {
   createPartLinesCache,
   createVersionIndexCache,
   readVersionPage,
+  storedPartLines,
 } from "../src/services/dataset-pages.js";
 import {
   partLines,
@@ -83,12 +84,18 @@ describe("dataset pages (r8 P1-5)", () => {
       ],
     ]) {
       const expected = await all(version);
-      const index = await buildVersionIndex(storage, version);
+      const index = await buildVersionIndex(storedPartLines(storage), version);
       expect(index.total).toBe(expected.length);
       for (let from = 0; from <= expected.length; from += 1) {
         for (const limit of [1, 2, 3, 100]) {
           expect(
-            await readVersionPage(storage, version, index, from, limit),
+            await readVersionPage(
+              storedPartLines(storage),
+              version,
+              index,
+              from,
+              limit,
+            ),
           ).toEqual(expected.slice(from, from + limit));
         }
       }
@@ -100,22 +107,26 @@ describe("dataset pages (r8 P1-5)", () => {
       await write([rec("a", "1"), rec("b", "1")]),
       await write([scoreUpdate("a", { q: 1 }), rec("c", "1")]),
     ];
-    const index = await buildVersionIndex(storage, parts);
-    const all = await readVersionPage(storage, parts, index, 0, 100);
-    const lines = createPartLinesCache(storage);
+    const index = await buildVersionIndex(storedPartLines(storage), parts);
+    const all = await readVersionPage(
+      storedPartLines(storage),
+      parts,
+      index,
+      0,
+      100,
+    );
+    const lines = createPartLinesCache(storedPartLines(storage));
     fetched = [];
     const pages = [];
     for (let from = 0; from < 3; from += 1) {
-      pages.push(
-        ...(await readVersionPage(storage, parts, index, from, 1, lines)),
-      );
+      pages.push(...(await readVersionPage(lines, parts, index, from, 1)));
     }
     expect(pages).toEqual(all);
     expect(fetched.sort()).toEqual(parts.map((p) => p.key).sort());
-    const tiny = createPartLinesCache(storage, 10);
+    const tiny = createPartLinesCache(storedPartLines(storage), 10);
     fetched = [];
-    await readVersionPage(storage, parts, index, 0, 1, tiny);
-    await readVersionPage(storage, parts, index, 0, 1, tiny);
+    await readVersionPage(tiny, parts, index, 0, 1);
+    await readVersionPage(tiny, parts, index, 0, 1);
     expect(fetched.length).toBe(4); // too big to keep: read again
   });
 
@@ -154,12 +165,18 @@ describe("dataset pages (r8 P1-5)", () => {
     // a: a correction; b: re-sent without a rule; c: no rule; d: no score; e: early 0.9.
     expect(expected.map((r) => r.id)).toEqual(["a", "b", "c", "e"]);
     expect(expected[0]?.metadata).toEqual({ model: "m" });
-    const index = await buildVersionIndex(storage, parts);
+    const index = await buildVersionIndex(storedPartLines(storage), parts);
     expect(index.total).toBe(4);
     for (let from = 0; from <= expected.length; from += 1) {
       for (const limit of [1, 2, 100]) {
         expect(
-          await readVersionPage(storage, parts, index, from, limit),
+          await readVersionPage(
+            storedPartLines(storage),
+            parts,
+            index,
+            from,
+            limit,
+          ),
         ).toEqual(expected.slice(from, from + limit));
       }
     }
@@ -182,7 +199,7 @@ describe("dataset pages (r8 P1-5)", () => {
       fetched = [];
       const version = { parts: parts.slice(0, n) };
       expect(await cache.get(version)).toEqual(
-        await buildVersionIndex(s3.storage, version.parts),
+        await buildVersionIndex(storedPartLines(s3.storage), version.parts),
       );
       // Version n extends version n-1: one part read, not n.
       expect(fetched).toEqual([parts[n - 1]?.key]);
@@ -191,7 +208,7 @@ describe("dataset pages (r8 P1-5)", () => {
     fetched = [];
     const other = { parts: [parts[0] as DatasetPart, parts[2] as DatasetPart] };
     expect(await cache.get(other)).toEqual(
-      await buildVersionIndex(s3.storage, other.parts),
+      await buildVersionIndex(storedPartLines(s3.storage), other.parts),
     );
     expect(fetched).toHaveLength(2);
   });
@@ -237,7 +254,13 @@ describe("dataset pages (r8 P1-5)", () => {
       gc();
       const heapBefore = process.memoryUsage().heapUsed;
       const t0 = performance.now();
-      const page = await readVersionPage(storage, parts, index, from, 50);
+      const page = await readVersionPage(
+        storedPartLines(storage),
+        parts,
+        index,
+        from,
+        50,
+      );
       worstMs = Math.max(worstMs, performance.now() - t0);
       worstHeap = Math.max(
         worstHeap,
@@ -248,7 +271,9 @@ describe("dataset pages (r8 P1-5)", () => {
       expect(fetched.length).toBeLessThanOrEqual(3);
     }
     expect(
-      (await readVersionPage(storage, parts, index, 31_000, 1))[0]?.scores,
+      (
+        await readVersionPage(storedPartLines(storage), parts, index, 31_000, 1)
+      )[0]?.scores,
     ).toEqual({ q: 1 });
     // Loading the version would allocate several times its JSON size (~45 MB);
     // a page allocates about one part's worth.

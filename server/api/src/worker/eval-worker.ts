@@ -19,14 +19,13 @@ import {
   isInferenceUnavailable,
   sleep,
 } from "../services/evals/inference.js";
-import { buildTasks } from "../services/evals/planner.js";
+import { evalTasks } from "../services/evals/planner.js";
 import { scoreOutput, type ScoringContext } from "../services/evals/scoring.js";
 import type {
   ChatCompletionClient,
   InferenceClients,
   RegexEvaluator,
 } from "../services/evals/types.js";
-import { mergeRecords } from "../services/record-merge.js";
 import type { EvalTask } from "../store/types.js";
 import { log, withLogContext } from "../telemetry/log.js";
 import {
@@ -36,6 +35,7 @@ import {
   type AttemptRef,
   type WorkerClient,
 } from "./client.js";
+import { openDownloadedVersion } from "./dataset-file.js";
 
 /**
  * The eval worker (`grad-server worker --kinds eval`): claims eval jobs
@@ -186,6 +186,18 @@ const patient = (
 
 const doneKey = (model: string, index: number) => `${model}\u0000${index}`;
 
+/** The next `n` items of `items` (fewer at its end). */
+const take = async <T>(items: AsyncIterator<T>, n: number): Promise<T[]> => {
+  const out: T[] = [];
+  while (out.length < n) {
+    const next = await items.next();
+    if (next.done) break;
+    out.push(next.value);
+  }
+
+  return out;
+};
+
 /** Runs `fn` over `items`, `concurrency` at a time; the first failure stops every lane. */
 const runPool = async <T>(
   items: readonly T[],
@@ -291,17 +303,6 @@ export const unconfiguredInference = (): InferenceClients => {
 
   return { models: client, judge: client };
 };
-
-/** The eval's tasks: the usable records of its pinned dataset version. */
-const evalTasks = (
-  ev: Pick<EvalJob, "limit" | "mode" | "rubric">,
-  rawRecords: Parameters<typeof mergeRecords>[0],
-): EvalTask[] =>
-  buildTasks(
-    mergeRecords(rawRecords),
-    ev.limit ?? undefined,
-    ev.mode === "score" ? ev.rubric.map((r) => r.name) : null,
-  ).tasks;
 
 export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
   const { client } = options;
@@ -563,10 +564,18 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       judgeTargets: ev.judge_targets,
     };
 
+    let version: Awaited<ReturnType<typeof openDownloadedVersion>> | null =
+      null;
     try {
+      // The version is read from local disk a page at a time and its tasks
+      // made as they come: memory is bounded by the page, not the dataset.
+      version = await openDownloadedVersion(
+        client.datasetLines(job.dataset.download_url),
+      );
       const tasks = evalTasks(
-        ev,
-        await client.datasetRecords(job.dataset.download_url),
+        version.records(),
+        ev.limit ?? undefined,
+        ev.mode === "score" ? ev.rubric.map((r) => r.name) : null,
       );
       const done = new Set(
         Object.entries(ev.done).flatMap(([model, indices]) =>
@@ -574,10 +583,10 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         ),
       );
 
-      for (let start = 0; start < tasks.length; start += TASK_PAGE) {
+      for (let page = await take(tasks, TASK_PAGE); page.length > 0; ) {
         const work: Array<{ task: EvalTask; model: string; sample: number }> =
           [];
-        for (const task of tasks.slice(start, start + TASK_PAGE)) {
+        for (const task of page) {
           for (const model of ev.models) {
             for (let sample = 0; sample < ev.samples; sample += 1) {
               const index = task.task_index * ev.samples + sample;
@@ -601,6 +610,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         });
         await send();
         if (halted()) break;
+        page = await take(tasks, TASK_PAGE);
       }
       if (halt === "lost") return "lease_lost";
       if (outage && halt === null && !stopping) {
@@ -660,6 +670,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
 
       return error instanceof ServerUnavailable ? "handed_back" : "failed";
     } finally {
+      await version?.close();
       clearInterval(heartbeat);
       halted = () => stopping;
       waiting = null;

@@ -8,7 +8,6 @@ import type { z } from "@hono/zod-openapi";
 import type {
   ClaimJobResponseSchema,
   CompleteJobRequestSchema,
-  DatasetRecord,
   HeartbeatResponseSchema,
   PostEvalOutputsRequestSchema,
   PostEvalOutputsResponseSchema,
@@ -72,8 +71,8 @@ export interface WorkerClient {
     job: AttemptRef,
     stats?: Record<string, unknown>,
   ): Promise<z.infer<typeof HeartbeatResponseSchema>>;
-  /** The job's pinned dataset version: every record, before merging. */
-  datasetRecords(downloadUrl: string): Promise<DatasetRecord[]>;
+  /** The job's pinned dataset version: its stored JSONL lines, in order, before merging. */
+  datasetLines(downloadUrl: string): AsyncGenerator<string>;
   postOutputs(
     job: AttemptRef,
     body: OutputsBody,
@@ -180,7 +179,7 @@ export const createWorkerClient = (
         false,
       ),
 
-    datasetRecords: async (downloadUrl) => {
+    datasetLines: async function* (downloadUrl) {
       // Streamed and gunzipped line by line: a dataset is any number of GB,
       // and a buffered body or one string of it (V8's ~512 MB string limit)
       // would not fit. The download is aborted only when it stalls.
@@ -216,21 +215,17 @@ export const createWorkerClient = (
         body.on("data", alive);
         const gunzip = body.pipe(createGunzip());
         body.on("error", (error) => gunzip.destroy(error));
-        const records: DatasetRecord[] = [];
+        const lines = createInterface({ input: gunzip, crlfDelay: Infinity });
         try {
-          for await (const line of createInterface({
-            input: gunzip,
-            crlfDelay: Infinity,
-          })) {
-            if (line.length > 0) {
-              records.push(JSON.parse(line) as DatasetRecord);
-            }
+          for await (const line of lines) {
+            if (line.length > 0) yield line;
           }
         } catch (error) {
-          throw error instanceof SyntaxError ? error : unavailable(error);
+          throw unavailable(error);
+        } finally {
+          lines.close();
+          body.destroy();
         }
-
-        return records;
       } finally {
         clearTimeout(timer);
       }
