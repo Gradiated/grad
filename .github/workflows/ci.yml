@@ -398,6 +398,14 @@ jobs:
           refuses "the old docs' keda.maxReplicaCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set keda.maxReplicaCount=4
           refuses "the old docs' models.mirrorUri" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set models.mirrorUri=s3://m
           refuses "an unknown workers.auth" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.auth=lease
+          autoscaling() {  # autoscaling <want> <helm template args...>: a waiting run says a worker is starting only if one can
+            local want=$1; shift
+            got=$(helm template grad "$chart" --set storage.s3Bucket=a --set secrets.databaseUrl="$db" --set keda.enabled=true --set keda.trigger=metrics-api "$@" | grep -F GRAD_WORKER_AUTOSCALING)
+            [[ $got == *"value: \"$want\""* ]] || { echo "GRAD_WORKER_AUTOSCALING should be $want with $*: $got"; exit 1; }
+          }
+          autoscaling true
+          autoscaling false --set workers.train.enabled=false
+          autoscaling true --set workers.train.enabled=false --set api.workerAutoscaling=true
           {
             helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db"
             echo ---

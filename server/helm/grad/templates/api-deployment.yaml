@@ -1,4 +1,14 @@
 {{- include "grad.validate" . -}}
+{{- /* Runs scale from zero only when KEDA scales a pool that takes train jobs. */ -}}
+{{- $autoscaling := false -}}
+{{- range $name, $w := omit .Values.workers "auth" -}}
+{{- if and $.Values.keda.enabled $w.enabled (has "train" ($w.kinds | default list)) -}}
+{{- $autoscaling = true -}}
+{{- end -}}
+{{- end -}}
+{{- if kindIs "bool" .Values.api.workerAutoscaling -}}
+{{- $autoscaling = .Values.api.workerAutoscaling -}}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -83,7 +93,7 @@ spec:
             {{- with .Values.evals.inferenceBaseUrl }}
             - {name: GRAD_INFERENCE_BASE_URL, value: {{ . | quote }}}
             {{- end }}
-            - {name: GRAD_WORKER_AUTOSCALING, value: {{ .Values.keda.enabled | quote }}}
+            - {name: GRAD_WORKER_AUTOSCALING, value: {{ $autoscaling | quote }}}
             - {name: METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
             {{- if .Values.metrics.enabled }}
             - {name: METRICS_PORT, value: {{ .Values.metrics.port | quote }}}

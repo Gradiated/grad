@@ -64,6 +64,11 @@ api:
   # ClusterIP Service <fullname>-internal, never by the API Service or the
   # Ingress. Gradiated Cloud uses 8788.
   internalPort: 0
+  # Whether a run waiting for a worker says one is starting (scale from zero)
+  # instead of "waiting for a worker". Empty: true when keda.enabled and an
+  # enabled worker pool takes train jobs. Set true when train workers come
+  # from elsewhere on demand (e.g. leased GPU hosts), false to never claim it.
+  workerAutoscaling: ""
   defaultWorkspaceId: default
   # Per-workspace queue caps. Claims are fair across workspaces (the one with
   # the fewest running jobs of the kind goes next); past maxRunning a
