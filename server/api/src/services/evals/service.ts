@@ -749,14 +749,11 @@ export const createEvalService = (
     }
     assertCompletion(job, body.status);
     const now = clock.now().toISOString();
-    if (job.status === "cancelled") {
-      // Cancelled while it ran: whatever the worker reports, it ends here.
-      await releaseCancelled(job, fenceOf(job, ["cancelled"]));
-      return toPublic(await load(job.workspace_id, id));
-    }
     const expect = fenceOf(job, ["running"]);
 
-    if (body.status === "completed") {
+    if (job.status === "cancelled") {
+      // Released below.
+    } else if (body.status === "completed") {
       await completeGenerated(job, expect);
     } else if (body.status === "abandoned") {
       const reason = body.reason ?? "worker_error";
@@ -776,7 +773,18 @@ export const createEvalService = (
       );
     }
 
-    return toPublic(await load(job.workspace_id, id));
+    // Cancelled while it ran, or during this completion (its fences above
+    // lose to the cancel): whatever the worker reports, it ends here.
+    const after = await load(job.workspace_id, id);
+    if (
+      after.status === "cancelled" &&
+      holdsLease(principal, after, body.worker_id, body.attempt)
+    ) {
+      await releaseCancelled(after, fenceOf(after, ["cancelled"]));
+      return toPublic(await load(job.workspace_id, id));
+    }
+
+    return toPublic(after);
   };
 
   const resultsPage = async (

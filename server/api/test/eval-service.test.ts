@@ -1,3 +1,4 @@
+import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -20,6 +21,7 @@ import {
   createEval,
 } from "./fixtures/evals.js";
 import { judgeResponder } from "./fixtures/fake-openai.js";
+import { fileSchemaName, postgresUrl } from "./fixtures/postgres.js";
 
 const request = (raw: Record<string, unknown>): PlanEvalRequest =>
   PlanEvalRequestSchema.parse(raw);
@@ -577,6 +579,47 @@ describe("eval service", () => {
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");
     expect(failed.error).toMatch(/lost its lease.*max_attempts=1/);
+  });
+
+  it("a cancel that lands during the worker's /complete releases the eval at once", async () => {
+    h = await makeEvalHarness();
+    const { t } = h;
+    await seedDataset(t, "qa", qaRecords(1));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
+    );
+    const dead = deadWorker(t);
+    await dead.claim(["eval"], 30);
+
+    // The completion's fenced write waits on the row while a cancel commits.
+    const holder = new pg.Client({ connectionString: postgresUrl() });
+    await holder.connect();
+    try {
+      await holder.query(`SET search_path TO "${await fileSchemaName()}"`);
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM grad_jobs WHERE id = $1 FOR UPDATE", [
+        created.id,
+      ]);
+      const completing = dead.complete(
+        { id: created.id, attempt: 1 },
+        { status: "failed", error: "boom" },
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      await holder.query(
+        "UPDATE grad_jobs SET status = 'cancelled' WHERE id = $1",
+        [created.id],
+      );
+      await holder.query("COMMIT");
+      expect(await completing).toMatchObject({ status: "cancelled" });
+    } finally {
+      await holder.end();
+    }
+    expect(await t.deps.store.evals.getById(created.id)).toMatchObject({
+      status: "cancelled",
+      worker_id: null,
+    });
   });
 
   it("cancels active evals once and never runs them", async () => {
