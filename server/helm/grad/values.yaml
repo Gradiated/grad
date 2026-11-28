@@ -208,6 +208,16 @@ models:
   # Weights mirror for air-gapped installs: a directory or s3://bucket/prefix
   # holding <mirror>/<model id>/ (GRAD_MODELS_MIRROR on the workers).
   mirror: ""
+  # The volume workers keep downloaded base models in (the Hugging Face cache and
+  # an s3:// mirror's copies), mounted at /home/grad/.cache. Empty: an emptyDir,
+  # so every new worker pod downloads the weights again (Qwen3-8B is 16 GB),
+  # including each KEDA scale-up from zero. A node-local hostPath keeps them for
+  # the node's next workers; workers sharing it download a model once (the others
+  # wait for it). The directory must be writable by uid 10001 (create it in the
+  # node's bootstrap: install -d -o 10001 -g 10001 /var/cache/grad-models).
+  cache: {}
+  #  hostPath: {path: /var/cache/grad-models, type: Directory}
+  #  persistentVolumeClaim: {claimName: grad-models}  # ReadWriteMany across nodes
 
 # Workers pull jobs from the API and claim only their `kinds`. GPU `train`
 # workers never receive workspace secrets; imports and source syncs (which carry

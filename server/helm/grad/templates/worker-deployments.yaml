@@ -180,7 +180,11 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: hf-cache
+          {{- if $.Values.models.cache }}
+          {{- toYaml $.Values.models.cache | nindent 10 }}
+          {{- else }}
           emptyDir: {}
+          {{- end }}
         {{- if $k8s }}
         - name: worker-token
           projected:

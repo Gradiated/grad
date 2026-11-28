@@ -14,11 +14,13 @@ that is not already local raises ``ModelUnavailableError`` with what to set.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import dev_models
 from .errors import ModelUnavailableError
@@ -133,6 +135,25 @@ def _sync_s3_prefix(uri: str, dest: Path) -> bool:
     return found
 
 
+#: Written into an s3:// mirror's local copy once every file is in: a sync cut short (a crash,
+#: a kill, a full disk) leaves no marker, so the next run finishes it instead of loading it.
+SYNCED_MARKER = ".grad_synced"
+
+
+@contextlib.contextmanager
+def _sync_lock(dest: Path) -> Iterator[None]:
+    """One sync of ``dest`` at a time across the processes sharing the cache (a node's
+    workers on one hostPath): the others wait, then find it synced."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest.parent / f".{dest.name}.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _synced(dest: Path) -> bool:
+    return (dest / SYNCED_MARKER).is_file()
+
+
 def _mirror_name(name: str) -> bool:
     """A model id or repo usable as a path under the mirror: no empty, '.' or '..' segments,
     so a job's model id can't name a directory outside it."""
@@ -145,7 +166,11 @@ def _from_mirror(model_id: str, repo: str | None, mirror: str) -> ResolvedModel 
         cache = Path(os.environ.get("GRAD_MODELS_CACHE", Path.home() / ".cache" / "grad" / "models"))
         for name in names:
             dest = cache / name
-            if (dest / "config.json").is_file() or _sync_s3_prefix(f"{mirror.rstrip('/')}/{name}", dest):
+            if not _synced(dest):
+                with _sync_lock(dest):
+                    if not _synced(dest) and _sync_s3_prefix(f"{mirror.rstrip('/')}/{name}", dest):
+                        (dest / SYNCED_MARKER).touch()
+            if _synced(dest):
                 return _resolved(model_id, dest, repo or model_id, "mirror")
         return None
     for name in names:
@@ -299,7 +324,7 @@ def resolve_config(model_id: str) -> tuple[ResolvedModel, dict[str, Any]]:
             cache = Path(os.environ.get("GRAD_MODELS_CACHE", Path.home() / ".cache" / "grad" / "models"))
             for name in [n for n in [key] + ([repo] if repo else []) if _mirror_name(n)]:
                 weights, configs = cache / name, cache / ".configs" / name
-                if (weights / "config.json").is_file():
+                if _synced(weights):
                     resolved = _resolved(key, weights, repo or key, "mirror")
                 elif (configs / "config.json").is_file() or _s3_config(f"{mirror.rstrip('/')}/{name}", configs):
                     resolved = _resolved(key, configs, repo or key, "mirror")

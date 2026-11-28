@@ -329,6 +329,44 @@ class ModelResolutionTests(TempDirCase):
             with self.assertRaisesRegex(ModelUnavailableError, "boto3"):
                 resolve_model("qwen/qwen3-4b")
 
+    def test_s3_mirror_sync_cut_short_is_finished_and_concurrent_syncs_download_once(self) -> None:
+        import threading
+
+        objects = {"models/qwen/qwen3-4b/config.json": b"{}", "models/qwen/qwen3-4b/model.safetensors": b"weights"}
+        downloads: list[str] = []
+        state = {"fail": True}
+
+        class FakeClient:
+            def get_paginator(self, _name):
+                return self
+
+            def paginate(self, Bucket, Prefix):  # noqa: N803 - boto3 signature
+                yield {"Contents": [{"Key": k, "Size": len(v)} for k, v in objects.items() if k.startswith(Prefix)]}
+
+            def download_file(self, bucket, key, target):
+                if key.endswith(".safetensors") and state["fail"]:
+                    raise OSError("connection reset")  # killed mid-sync: config.json is already there
+                downloads.append(key)
+                Path(target).write_bytes(objects[key])
+
+        cache = self.tmpdir()
+        os.environ.update({"GRAD_MODELS_MIRROR": "s3://bucket/models", "GRAD_MODELS_CACHE": str(cache), "GRAD_OFFLINE": "1"})
+        with mock.patch.dict(sys.modules, {"boto3": types.SimpleNamespace(client=lambda _name: FakeClient())}):
+            with self.assertRaises(OSError):
+                resolve_model("qwen/qwen3-4b")
+            self.assertTrue((cache / "qwen/qwen3-4b/config.json").is_file())
+            state["fail"] = False
+            downloads.clear()
+            results: list[Path] = []
+            threads = [threading.Thread(target=lambda: results.append(resolve_model("qwen/qwen3-4b").path)) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(results, [cache / "qwen/qwen3-4b"] * 4)
+        self.assertEqual((cache / "qwen/qwen3-4b/model.safetensors").read_bytes(), b"weights")
+        self.assertEqual(downloads, ["models/qwen/qwen3-4b/model.safetensors"])  # once, and config.json kept
+
 
 if __name__ == "__main__":
     unittest.main()

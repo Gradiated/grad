@@ -343,6 +343,10 @@
       "properties": {
         "mirror": {
           "type": "string"
+        },
+        "cache": {
+          "type": "object",
+          "description": "A Kubernetes volume source (hostPath, persistentVolumeClaim, ...) for the workers' model cache; empty: emptyDir."
         }
       }
     },
