@@ -4,7 +4,7 @@ import { IconChevron, IconEvals } from "../components/icons.js";
 import { Badge, Banner, Card, Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
 import { useApi } from "../lib/api.js";
 import { ago, compact, dateTime, int, num, usd } from "../lib/format.js";
-import { useNow, usePagedList, useResource } from "../lib/hooks.js";
+import { useNow, usePagedList, useResource, useTitle } from "../lib/hooks.js";
 import { Link } from "../lib/router.js";
 import { Message, recordTurns } from "../components/record.js";
 
@@ -99,6 +99,7 @@ export const EvalDetailPage = ({ id }: { id: string }) => {
   const now = useNow();
   const res = useResource((signal) => client.getEval(id, { signal }), [id], { pollMs: (e) => (e && TERMINAL_EVAL.has(e.status) ? undefined : 3000) });
   const e = res.data;
+  useTitle(e?.name);
   return (
     <div className="page">
       <div className="crumbs">

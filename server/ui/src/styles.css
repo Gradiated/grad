@@ -1982,3 +1982,22 @@ details.disclosure:not([open]) > summary.card-header {
 .version-input {
   width: 96px;
 }
+
+.skip {
+  position: absolute;
+  left: 8px;
+  top: -40px;
+  z-index: 10;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.skip:focus {
+  top: 8px;
+}
+
+.main:focus {
+  outline: none;
+}

@@ -156,3 +156,10 @@ export const useNow = (ms = 15_000): number => {
   }, [ms]);
   return now;
 };
+
+/** Names the tab after what the page shows once it has loaded ("support-sft · grad"). */
+export const useTitle = (title: string | undefined): void => {
+  useEffect(() => {
+    if (title) document.title = `${title} · grad`;
+  }, [title]);
+};

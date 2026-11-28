@@ -379,6 +379,7 @@ describe("runs", () => {
     expect(container.querySelector("pre.code")?.textContent).toContain("model: test/tiny-qwen3");
     expect(container.querySelector("pre.code")?.textContent).toContain("checkpoint_every_steps: 1");
     expect(container.querySelectorAll(".table tbody tr").length).toBeGreaterThanOrEqual(3);
+    expect(document.title).toBe("support-sft · grad");
     // No /events on this server: the page fell back to the metrics stream.
     expect(server.calls.some((c) => c.path.startsWith(`/v1/runs/${RUN_ID}/events`))).toBe(true);
     expect(server.calls.some((c) => c.path.startsWith(`/v1/runs/${RUN_ID}/metrics`))).toBe(true);

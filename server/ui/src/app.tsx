@@ -102,6 +102,9 @@ const Shell = ({ apiKey, onSignOut }: { apiKey: string | undefined; onSignOut: (
   }, [page.title]);
   return (
     <div className="shell">
+      <a className="skip" href="#main">
+        Skip to content
+      </a>
       <aside className="sidebar">
         <nav className="sidebar-inner" aria-label="Main">
           <Link href="/runs" className="brand" aria-label="grad: runs">
@@ -130,7 +133,7 @@ const Shell = ({ apiKey, onSignOut }: { apiKey: string | undefined; onSignOut: (
           </div>
         </nav>
       </aside>
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Offline />
         {page.node}
       </main>

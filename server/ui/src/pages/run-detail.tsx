@@ -8,7 +8,7 @@ import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, 
 import { CODEC, convertKeys, errorMessage, isTerminalRun, useApi, type RunPhase } from "../lib/api.js";
 import { evalLossOf, foldCheckpoints, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
 import { ago, bytes, compact, dateTime, duration, int, num, plural, time, toYaml, usd } from "../lib/format.js";
-import { useNow, usePagedList, useResource } from "../lib/hooks.js";
+import { useNow, usePagedList, useResource, useTitle } from "../lib/hooks.js";
 import { renderReport } from "../lib/report.js";
 import { Link } from "../lib/router.js";
 import { useRunStream } from "../lib/stream.js";
@@ -25,6 +25,7 @@ export const RunDetailPage = ({ id }: { id: string }) => {
   // The stream's final event is the freshest copy once the run ends.
   const run = pickNewest(polled.data, stream.final);
   const [dialog, setDialog] = useState<"cancel" | "resume" | null>(null);
+  useTitle(run?.name);
 
   if (!run) {
     return (
