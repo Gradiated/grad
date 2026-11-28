@@ -457,7 +457,7 @@ def group_rows(rows: list[list[int]], lengths: Sequence[int], max_tokens: int) -
 
 def collate_packed(
     rows: list[list[int]],
-    examples: Sequence[tuple[Sequence[int], Sequence[bool]]],
+    examples: Sequence[tuple[Any, Any]],  # (int ids, bool mask): numpy arrays or sequences
     pad_id: int,
     device: torch.device,
     segment_offset: dict[int, int] | None = None,
@@ -574,7 +574,7 @@ def packed_token_losses(lm: Any, batch: PackedBatch) -> tuple[torch.Tensor, torc
 
 
 def padded_batch(
-    sequences: Sequence[Sequence[int]], pad_id: int, device: torch.device
+    sequences: Sequence[Any], pad_id: int, device: torch.device  # int id arrays or sequences
 ) -> tuple[torch.Tensor, torch.Tensor]:
     width = max(len(s) for s in sequences)
     ids = torch.full((len(sequences), width), pad_id, dtype=torch.long)

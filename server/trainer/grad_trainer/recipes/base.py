@@ -26,8 +26,8 @@ class RecipeRunner:
     def build_task(
         self,
         spec: TrainSpec,
-        train: list[dict[str, Any]],
-        held_out: list[dict[str, Any]],
+        train: Sequence[dict[str, Any]],
+        held_out: Sequence[dict[str, Any]],
         workdir: Path,
         base: BaseArtifact | None,
     ) -> TrainingTask:  # pragma: no cover - abstract
@@ -92,6 +92,8 @@ class RecipeRunner:
             eval_fraction=spec.split.eval_fraction,
             seed=spec.split.seed,
         )
+        train: Sequence[dict[str, Any]]
+        held_out: Sequence[dict[str, Any]]
         if isinstance(prepared, MergedDataset):
             train, held_out = prepared.select(train_idx), prepared.select(eval_idx)
         else:

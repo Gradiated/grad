@@ -44,7 +44,7 @@ def _sniff(path: Path) -> bytes:
 
 def _open(path: Path) -> IO[bytes]:
     if _sniff(path)[:2] == _GZIP_MAGIC:
-        return gzip.open(path, "rb")
+        return gzip.open(path, "rb")  # type: ignore[return-value]
     return open(path, "rb")
 
 
