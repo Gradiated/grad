@@ -575,6 +575,46 @@ describe("S3 down", () => {
   }, 30_000);
 });
 
+describe("S3 lost an object a row names", () => {
+  it("answers 500 storage_object_missing, not a bare internal_error", async () => {
+    const { ObjectNotFoundError } = await import("../src/storage/types.js");
+    const t = await makeTestApp();
+    try {
+      await t.request("/v1/datasets/lost/records", {
+        body: { records: sftRecords(4) },
+      });
+      // The bucket was emptied (or restored from an older copy) since.
+      const storage = new Proxy(t.deps.storage, {
+        get: (target, prop, receiver) =>
+          prop === "get"
+            ? async (key: string) => {
+                throw new ObjectNotFoundError(key);
+              }
+            : Reflect.get(target, prop, receiver),
+      });
+      const lost = await makeTestApp({
+        store: t.deps.store,
+        clock: t.clock,
+        storage,
+      });
+      const res = await lost.json<{ code: string }>("/v1/runs", {
+        body: {
+          dataset: "lost",
+          name: "lost",
+          recipe: { kind: "sft", model: "qwen/qwen3-0.6b" },
+        },
+      });
+      expect([res.status, res.body.code]).toEqual([
+        500,
+        "storage_object_missing",
+      ]);
+      await lost.close();
+    } finally {
+      await t.close();
+    }
+  });
+});
+
 /** An S3 endpoint that answers every request with `status`. */
 const startFakeS3 = async (status: number) => {
   const { createServer } = await import("node:http");

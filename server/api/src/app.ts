@@ -24,7 +24,10 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import { createServices, type Services } from "./services/index.js";
-import { StorageUnavailableError } from "./storage/types.js";
+import {
+  ObjectNotFoundError,
+  StorageUnavailableError,
+} from "./storage/types.js";
 import { isDatabaseUnavailable } from "./store/postgres/db.js";
 import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
 import { httpTelemetry } from "./telemetry/http.js";
@@ -129,6 +132,24 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
       });
 
       return res;
+    }
+
+    // A row names an object the bucket doesn't have: the bucket lost data or
+    // was restored from a copy older than the database.
+    if (error instanceof ObjectNotFoundError) {
+      log("error", "object missing from storage", {
+        request_id: c.get("requestId"),
+        path: c.req.path,
+        error: error.message,
+      });
+
+      return problemResponse(
+        c,
+        500,
+        "storage_object_missing",
+        "Stored data missing",
+        "Data this request needs is missing from object storage (lost, or restored from a backup older than the database). Quote the request_id when reporting it.",
+      );
     }
 
     if (isDatabaseUnavailable(error)) {
