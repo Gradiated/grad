@@ -405,12 +405,17 @@ export const extractBundle = async (archive: string, dest: string): Promise<void
   }
 };
 
-/** Extracts the verified bundle at `archive` into `dest` through a staging directory beside it. */
-export const extractInto = async (archive: string, dest: string): Promise<void> => {
+/** Throws unless `dest` is missing or an empty directory (checked before a download starts). */
+export const checkExtractDest = async (dest: string): Promise<void> => {
   const existing = await readdir(dest).catch(() => undefined);
   if (existing !== undefined && existing.length > 0) {
     throw new GradUsageError(`${dest} is not empty; pick a new directory.`, "destination_not_empty");
   }
+};
+
+/** Extracts the verified bundle at `archive` into `dest` through a staging directory beside it. */
+export const extractInto = async (archive: string, dest: string): Promise<void> => {
+  await checkExtractDest(dest);
   const parent = path.dirname(path.resolve(dest));
   await mkdir(parent, { recursive: true });
   const staging = await mkdtemp(path.join(parent, ".grad-extract-"));

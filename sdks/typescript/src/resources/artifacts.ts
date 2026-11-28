@@ -191,7 +191,8 @@ export const downloadArtifact = async (core: Core, ref: string, dest: string, op
     throw new GradUsageError("artifacts.download writes to disk and needs Node.js; use artifacts.stream() in a browser.", "node_only");
   }
   const { verifyChecksum = true, extract = false, ...request } = options;
-  const { extractInto, streamToFile } = await import("../node/files.js");
+  const { checkExtractDest, extractInto, streamToFile } = await import("../node/files.js");
+  if (extract) await checkExtractDest(dest);
   const opened = await openArtifact(core, ref, request);
   if (verifyChecksum && opened.sha256 === undefined) {
     await opened.response.cancel();

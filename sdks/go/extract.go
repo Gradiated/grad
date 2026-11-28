@@ -139,11 +139,19 @@ func extractBundle(archive, dest string) error {
 	return nil
 }
 
+// checkExtractDest refuses a destination that exists and is not an empty directory.
+func checkExtractDest(dest string) error {
+	if entries, err := os.ReadDir(dest); err == nil && len(entries) > 0 {
+		return newError("destination_not_empty", "%s is not empty; pick a new directory", dest)
+	}
+	return nil
+}
+
 // extractInto unpacks the verified bundle at archive into dest through a staging directory
 // next to it, so dest only ever appears complete.
 func extractInto(archive, dest string) error {
-	if entries, err := os.ReadDir(dest); err == nil && len(entries) > 0 {
-		return newError("destination_not_empty", "%s is not empty; pick a new directory", dest)
+	if err := checkExtractDest(dest); err != nil {
+		return err
 	}
 	parent := filepath.Dir(filepath.Clean(dest))
 	if err := os.MkdirAll(parent, 0o755); err != nil {

@@ -73,7 +73,8 @@ func TestDownloadExtractWritesTheVerifiedFiles(t *testing.T) {
 	for ref, body := range bad {
 		routes["GET /v1/artifacts/"+ref+"/download"] = bundleRoute(body, sha(string(body)))
 	}
-	c, _ := newFake(t, routes).client()
+	srv := newFake(t, routes)
+	c, _ := srv.client()
 
 	root := t.TempDir()
 	dest := filepath.Join(root, "support-sft")
@@ -92,8 +93,13 @@ func TestDownloadExtractWritesTheVerifiedFiles(t *testing.T) {
 	if entries, _ := os.ReadDir(root); len(entries) != 1 {
 		t.Fatalf("left behind next to dest: %v", entries)
 	}
+	// A non-empty destination is refused before the (possibly many-GB) download starts.
+	before := srv.count("GET", "/v1/artifacts/good/download")
 	if _, err := c.Artifacts.Download(ctx, "good", dest, grad.Extract()); err == nil {
 		t.Fatal("extracted into a non-empty directory")
+	}
+	if got := srv.count("GET", "/v1/artifacts/good/download"); got != before {
+		t.Fatalf("downloaded the bundle before refusing a non-empty destination (%d requests, want %d)", got, before)
 	}
 
 	for ref := range bad {

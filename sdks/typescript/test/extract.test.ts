@@ -56,14 +56,18 @@ const server = () => {
 
 describe("artifact downloads with extract", () => {
   it("writes the verified files into a new directory and nothing else", async () => {
-    const { grad } = makeGrad(server());
+    const fake = server();
+    const { grad } = makeGrad(fake);
     const root = mkdtempSync(path.join(tmpdir(), "grad-extract-"));
     const dest = path.join(root, "support-sft");
     const result = await grad.artifacts.download("good", dest, { extract: true });
     expect(result.path).toBe(dest);
     for (const [name, body] of Object.entries(FILES)) expect(readFileSync(path.join(dest, name), "utf8")).toBe(body);
     expect(readdirSync(root)).toEqual(["support-sft"]);
+    // A non-empty destination is refused before the (possibly many-GB) download starts.
+    const downloads = fake.callsTo("GET", "/v1/artifacts/good/download").length;
     await expect(grad.artifacts.download("good", dest, { extract: true })).rejects.toThrow(/not empty/);
+    expect(fake.callsTo("GET", "/v1/artifacts/good/download").length).toBe(downloads);
   });
 
   it.each(["traversal", "symlink", "tampered", "unlisted", "unlisted-proto"])("refuses a %s bundle and leaves nothing behind", async (ref) => {

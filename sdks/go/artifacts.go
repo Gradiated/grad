@@ -135,6 +135,14 @@ func (s *ArtifactsService) Download(ctx context.Context, ref, dest string, opts 
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	if dest == "" {
+		dest = "."
+	}
+	if cfg.extract {
+		if err := checkExtractDest(dest); err != nil {
+			return nil, err
+		}
+	}
 	api, err := s.c.api()
 	if err != nil {
 		return nil, err
@@ -151,9 +159,6 @@ func (s *ArtifactsService) Download(ctx context.Context, ref, dest string, opts 
 		}
 	}
 
-	if dest == "" {
-		dest = "."
-	}
 	final := dest
 	if cfg.extract {
 		final = filepath.Join(filepath.Dir(filepath.Clean(dest)), downloadFileName(resp, ref))
