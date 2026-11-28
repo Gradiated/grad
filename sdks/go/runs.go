@@ -2,10 +2,7 @@ package grad
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"iter"
-	"time"
 
 	"github.com/Gradiated/grad/sdks/go/generated"
 )
@@ -351,9 +348,9 @@ func (r *Run) finish(ctx context.Context) error {
 	return nil
 }
 
-// Metrics iterates over training metrics. With follow, it streams live points over
-// Server-Sent Events until the run finishes, reconnecting with Last-Event-ID after a
-// dropped connection; without follow it returns the points recorded so far.
+// Metrics iterates over training metrics. With follow, it streams live points (the
+// metric events of Events with Follow) until the run finishes; without follow it
+// returns the points recorded so far.
 //
 //	for m, err := range run.Metrics(ctx, true) { ... }
 func (r *Run) Metrics(ctx context.Context, follow bool) iter.Seq2[MetricPoint, error] {
@@ -370,71 +367,15 @@ func (r *Run) Metrics(ctx context.Context, follow bool) iter.Seq2[MetricPoint, e
 			return page.Data, page.NextCursor, nil
 		})
 	}
+	// The events stream carries every metric and ends after completed (which refreshes the run).
 	return func(yield func(MetricPoint, error) bool) {
-		lastID := ""
-		failures := 0
-		delay := 500 * time.Millisecond
-		for {
-			api, err := r.c.api()
+		for ev, err := range r.Events(ctx, EventsOptions{Follow: true}) {
 			if err != nil {
 				yield(MetricPoint{}, err)
 				return
 			}
-			var opts []generated.RequestOption
-			if lastID != "" {
-				opts = append(opts, generated.WithLastEventID(lastID))
-			}
-			stream, err := api.ListRunMetricsStream(ctx, r.ID, nil, opts...)
-			if err == nil {
-				for stream.Next() {
-					ev := stream.Event()
-					failures, delay = 0, 500*time.Millisecond
-					switch ev.Event {
-					case "metric":
-						var m MetricPoint
-						if derr := json.Unmarshal([]byte(ev.Data), &m); derr != nil {
-							stream.Close()
-							yield(MetricPoint{}, &DecodeError{GradError: &GradError{Code: "invalid_json", Message: "grad: metric event is not valid JSON: " + derr.Error(), Cause: derr}})
-							return
-						}
-						if ev.ID != "" {
-							lastID = ev.ID
-						}
-						if !yield(m, nil) {
-							stream.Close()
-							return
-						}
-					case "status":
-						var fresh generated.Run
-						if json.Unmarshal([]byte(ev.Data), &fresh) == nil && fresh.ID != "" {
-							r.Run = fresh
-						}
-						stream.Close()
-						return
-					}
-				}
-				err = stream.Err()
-				stream.Close()
-				if err == nil {
-					err = &ConnectionError{GradError: &GradError{Code: "connection_error", Message: "grad: the metrics stream closed before the run finished", Cause: io.ErrUnexpectedEOF}}
-				}
-			}
-			if ctx.Err() != nil {
-				yield(MetricPoint{}, &GradError{Code: "aborted", Message: "grad: metrics stream cancelled: " + ctx.Err().Error(), Cause: ctx.Err()})
+			if ev.Type == EventMetric && ev.Metric != nil && !yield(*ev.Metric, nil) {
 				return
-			}
-			failures++
-			if !isTransient(err) || failures > 10 {
-				yield(MetricPoint{}, err)
-				return
-			}
-			if serr := r.c.sleep(ctx, delay); serr != nil {
-				yield(MetricPoint{}, &GradError{Code: "aborted", Message: "grad: metrics stream cancelled: " + serr.Error(), Cause: serr})
-				return
-			}
-			delay *= 2
-			if delay > 5*time.Second {
-				delay = 5 * time.Second
 			}
 		}
 	}

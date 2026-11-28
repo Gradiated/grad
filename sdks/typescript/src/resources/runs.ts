@@ -93,10 +93,6 @@ const buildRunBody = async (params: RunParams) => {
   };
 };
 
-const decodeMetric = (data: string): MetricPoint => convertKeys(CODEC, "MetricPoint", JSON.parse(data), "decode") as MetricPoint;
-
-const decodeRun = (data: string): RunData => convertKeys(CODEC, "Run", JSON.parse(data), "decode") as RunData;
-
 const decodeEvent = (data: string): RunEvent => convertKeys(CODEC, "RunEvent", JSON.parse(data), "decode") as RunEvent;
 
 /** A checkpoint saved during a run; `promote()` turns it into a kept artifact. */
@@ -204,8 +200,8 @@ export class Run {
   }
 
   /**
-   * Metric points. With `follow: true` this streams live over SSE, reconnects
-   * with `Last-Event-ID` after drops, and ends when the run finishes.
+   * Metric points. With `follow: true` they stream live (the metric events of
+   * `events({ follow: true })`) and end when the run finishes.
    */
   async *metrics(options: MetricsOptions = {}): AsyncGenerator<MetricPoint, void, undefined> {
     const { follow = false, afterStep, ...request } = options;
@@ -218,27 +214,9 @@ export class Run {
       }
       return;
     }
-    let lastEventId: string | undefined;
-    let failures = 0;
-    while (true) {
-      try {
-        for await (const event of this.#core.api.listRunMetricsStream(this.id, {}, { ...request, ...(lastEventId !== undefined ? { lastEventId } : {}) })) {
-          failures = 0;
-          if (event.event === "metric") {
-            if (event.id !== undefined) lastEventId = event.id;
-            const point = decodeMetric(event.data);
-            if (afterStep === undefined || point.step > afterStep) yield point;
-          } else if (event.event === "status") {
-            this.update(decodeRun(event.data));
-            return;
-          }
-        }
-        // The stream closed without a final status (proxy timeout, deploy): reconnect.
-      } catch (error) {
-        if (request.signal?.aborted || !isTransient(error)) throw error;
-      }
-      failures += 1;
-      await this.#core.poll.sleep(Math.min(500 * 2 ** Math.min(failures - 1, 4), 5_000), request.signal);
+    // The events stream carries every metric (and ends after `completed`, which refreshes this run).
+    for await (const event of this.events({ ...request, follow: true })) {
+      if (event.type === "metric" && event.metric !== null && (afterStep === undefined || event.metric.step > afterStep)) yield event.metric;
     }
   }
 

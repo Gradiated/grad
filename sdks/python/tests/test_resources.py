@@ -548,33 +548,39 @@ class RunTests(unittest.TestCase):
 
     def test_sse_reconnects_with_last_event_id_and_dedupes(self) -> None:
         def metric(seq: int, step: int) -> str:
-            return f"event: metric\nid: {seq}\ndata: {json.dumps({'seq': seq, 'attempt': 1, 'step': step, 'loss': 0.5, 'tokens': 1, 'cost_usd': 0.0, 'timestamp': 'now'})}\n\n"
+            point = {"seq": seq, "attempt": 1, "step": step, "loss": 0.5, "tokens": 1, "cost_usd": 0.0, "timestamp": "now"}
+            event = {"type": "metric", "run_id": RUN_ID, "seq": seq, "attempt": 1, "timestamp": "now", "step": step, "metric": point}
+            return f"event: metric\nid: {seq}\ndata: {json.dumps(event)}\n\n"
 
-        status = f"event: status\ndata: {json.dumps(RUN_C)}\n\n"
+        done = {"type": "completed", "run_id": RUN_ID, "seq": 3, "attempt": 1, "timestamp": "now", "run": RUN_C}
+        status = f"event: completed\ndata: {json.dumps(done)}\n\n"
         first = Reply(200, headers={"content-type": "text/event-stream"}, chunks=[(": hi\n\nretry: 200\n\n" + metric(1, 1) + metric(2, 2)).encode()], error=ConnectionResetError("drop"))
         second = Reply(200, (metric(2, 2) + metric(3, 3) + status), {"content-type": "text/event-stream"})
-        client, sender, clock = make_client({f"GET /v1/runs/{RUN_ID}/metrics": [first, problem(503, "busy"), second]}, max_retries=0)
+        client, sender, clock = make_client({f"GET /v1/runs/{RUN_ID}/events": [first, problem(503, "busy"), second]}, max_retries=0)
         steps = [m.step for m in client.runs.metrics(RUN_ID, follow=True)]
         self.assertEqual(steps, [1, 2, 3])
         self.assertEqual([s.header("Last-Event-ID") for s in sender.sent], [None, "2", "2"])
         self.assertTrue(all(0 < s <= 10 for s in clock.sleeps))
+        after = [m.step for m in client.runs.metrics(RUN_ID, follow=True, after_step=1)]
+        self.assertEqual(after, [2, 3], "after_step drops earlier steps (the fake replays its last reply)")
 
-    def test_sse_stream_ending_without_status_reconnects(self) -> None:
+    def test_sse_stream_ending_without_completed_reconnects(self) -> None:
         empty = Reply(200, ": ping\n\n", {"content-type": "text/event-stream"})
-        done = Reply(200, f"event: status\ndata: {json.dumps(RUN_C)}\n\n", {"content-type": "text/event-stream"})
-        client, sender, _ = make_client({f"GET /v1/runs/{RUN_ID}/metrics": [empty, done]})
+        done = {"type": "completed", "run_id": RUN_ID, "seq": 1, "attempt": 1, "timestamp": "now", "run": RUN_C}
+        final = Reply(200, f"event: completed\ndata: {json.dumps(done)}\n\n", {"content-type": "text/event-stream"})
+        client, sender, _ = make_client({f"GET /v1/runs/{RUN_ID}/events": [empty, final]})
         self.assertEqual(list(client.runs.metrics(RUN_ID, follow=True, after_step=0)), [])
         self.assertEqual(len(sender.sent), 2)
 
     def test_sse_gives_up_after_repeated_failures(self) -> None:
-        client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}/metrics": refused()}, max_retries=0)
+        client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}/events": refused()}, max_retries=0)
         with self.assertRaises(grad.APIConnectionError):
             list(client.runs.metrics(RUN_ID, follow=True))
         bad = Reply(200, ": ping\n\n", {"content-type": "text/event-stream"})
-        client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}/metrics": bad})
+        client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}/events": bad})
         with self.assertRaises(grad.APIConnectionError) as ctx:
             list(client.runs.metrics(RUN_ID, follow=True))
-        self.assertIn("Lost the metrics stream", str(ctx.exception))
+        self.assertIn("Lost the event stream", str(ctx.exception))
 
     def test_sse_falls_back_to_polling_when_a_proxy_strips_the_stream(self) -> None:
         page = fixture("run-events-page.json")

@@ -7,6 +7,13 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **SDKs: one live stream per run.** `metrics(follow=True)` (Python, TypeScript, Go) and
+  `grad runs logs --follow` now read the metric events of the run's event stream
+  (`GET /v1/runs/{id}/events`), the stream `wait()` already follows, instead of a second SSE
+  connection to `/v1/runs/{id}/metrics`. The Rust SDK drops `runs().stream_metrics` and
+  `wait_with_metrics`: use `runs().events(id, true)` and match `RunEvent::Metric`, or
+  `wait_with_events`.
+
 ## [0.2.0-alpha.7] - 2026-11-28
 
 No migrations. The last fixes from the launch review:

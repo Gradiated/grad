@@ -173,45 +173,42 @@ describe("runs", () => {
     await expect(realGrad.runs.wait(completed.id, { signal: before.signal })).rejects.toBeInstanceOf(APIUserAbortError);
   });
 
-  it("streams metrics over SSE, reconnecting with Last-Event-ID until the status event", async () => {
-    const sse = wire<string>("metrics.sse");
-    const blocks = sse.split("\n\n").filter(Boolean);
-    const firstHalf = `${blocks.slice(0, 3).join("\n\n")}\n\n`;
-    const rest = `${blocks.slice(3).join("\n\n")}\n\n`;
+  it("follows metrics on the events stream, reconnecting with Last-Event-ID until completed", async () => {
+    const blocks = wire<string>("run-events.sse").split("\n\n").filter(Boolean);
+    const firstHalf = `${blocks.slice(0, 8).join("\n\n")}\n\n`;
+    const rest = `${blocks.slice(8).join("\n\n")}\n\n`;
     const stream = (text: string) => new Response(text, { status: 200, headers: { "content-type": "text/event-stream" } });
     const server = new FakeServer()
-      .on("GET", `${RUN}/metrics`, stream(firstHalf), json({}, 502), stream(rest))
-      .on("GET", RUN, json(withStatus("running")))
-      .on("GET", artifactPath, json(wire("artifact.json")));
+      .on("GET", `${RUN}/events`, stream(firstHalf), json({}, 502), stream(rest))
+      .on("GET", RUN, json(withStatus("running")));
     const { grad, clock } = makeGrad(server, { maxRetries: 0 });
     const run = await grad.runs.get(completed.id);
     const steps: number[] = [];
     for await (const m of run.metrics({ follow: true })) steps.push(m.step);
     expect(run.status).toBe("completed");
-    expect(steps).toEqual([...Array(steps.length).keys()].map((i) => i + 1));
-    const metricCalls = server.callsTo("GET", `${RUN}/metrics`);
-    expect(metricCalls).toHaveLength(3);
-    expect(metricCalls[0]?.headers.has("last-event-id")).toBe(false);
-    expect(metricCalls[1]?.headers.get("last-event-id")).toBe("3");
-    expect(metricCalls[2]?.headers.get("last-event-id")).toBe("3");
+    expect(steps).toEqual([1, 2, 3]);
+    const calls = server.callsTo("GET", `${RUN}/events`);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.headers.has("last-event-id")).toBe(false);
+    expect(calls[1]?.headers.get("last-event-id")).toBe("8");
+    expect(calls[2]?.headers.get("last-event-id")).toBe("8");
     expect(clock.sleeps).toEqual([500, 1000]);
   });
 
   it("follows metrics for docs-style `for await` and pages JSON metrics", async () => {
     const server = new FakeServer()
+      .on("GET", `${RUN}/events`, () => new Response(wire<string>("run-events.sse"), { status: 200 }))
       .on("GET", `${RUN}/metrics`, (call) =>
-        call.headers.get("accept") === "text/event-stream"
-          ? new Response(wire<string>("metrics.sse"), { status: 200 })
-          : call.url.searchParams.get("cursor")
-            ? json({ ...wire<Record<string, unknown>>("metrics-page.json"), data: [null], next_cursor: null })
-            : json({ ...wire<Record<string, unknown>>("metrics-page.json"), next_cursor: "c2" }),
+        call.url.searchParams.get("cursor")
+          ? json({ ...wire<Record<string, unknown>>("metrics-page.json"), data: [null], next_cursor: null })
+          : json({ ...wire<Record<string, unknown>>("metrics-page.json"), next_cursor: "c2" }),
       )
       .on("GET", RUN, json(withStatus("running")));
     const { grad } = makeGrad(server);
     const run = await grad.runs.get(completed.id);
     const live = [];
     for await (const m of run.metrics({ follow: true, afterStep: 2 })) live.push(m.step);
-    expect(live[0]).toBe(3);
+    expect(live).toEqual([3]);
     expect(run.status).toBe("completed");
     const paged = [];
     for await (const m of grad.runs.metrics(completed.id, { afterStep: 0 })) paged.push(m);
@@ -219,7 +216,7 @@ describe("runs", () => {
     expect(paged[0]).toHaveProperty("gradNorm");
     expect(server.callsTo("GET", `${RUN}/metrics`).at(-2)?.url.search).toBe("?after_step=0");
 
-    const failing = new FakeServer().on("GET", `${RUN}/metrics`, problemFixture("not-found"));
+    const failing = new FakeServer().on("GET", `${RUN}/events`, problemFixture("not-found"));
     const r2 = await makeGrad(failing).grad.runs.metrics(completed.id, { follow: true }).next().catch((x: unknown) => x);
     expect(r2).toBeInstanceOf(NotFoundError);
   });

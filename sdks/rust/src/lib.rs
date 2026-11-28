@@ -50,7 +50,7 @@ pub use events::{
 };
 pub use models::*;
 pub use resources::*;
-pub use sse::{MetricEvent, MetricStream, SseEvent, SseParser};
+pub use sse::{SseEvent, SseParser};
 pub use usage::{UsageBound, UsageQuery, UsageSummaryQuery};
 pub use util::sha256_hex;
 

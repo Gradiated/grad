@@ -711,7 +711,11 @@ class Runs(_Resource):
     def metrics(self, run_id: str, *, follow: bool = False, after_step: int | None = None) -> Iterator[MetricPoint]:
         """Metric points so far; ``follow=True`` streams live (SSE) until the run finishes."""
         if follow:
-            return (event for kind, event in self._follow(run_id, None) if kind == "metric" and (after_step is None or event.step > after_step))
+            return (
+                event.metric
+                for event in self._follow_events(run_id, None)
+                if isinstance(event, MetricEvent) and (after_step is None or event.metric.step > after_step)
+            )
         return self._metric_pages(run_id, after_step)
 
     def events(self, run_id: str, *, follow: bool = False, timeout: float | None = None) -> Iterator[RunEvent]:
@@ -834,96 +838,11 @@ class Runs(_Resource):
                 return
             cursor = nxt
 
-    def _follow(self, run_id: str, deadline: float | None) -> Iterator[tuple[str, Any]]:
-        """Yield ``("metric", MetricPoint)`` events then one ``("status", Run)``; reconnects."""
-        last_seq: int | None = None
-        failures = 0
-        retry_ms = 1000
-        while True:
-            headers = {"Last-Event-ID": str(last_seq)} if last_seq is not None else None
-            try:
-                resp = self._client._transport.stream(
-                    "GET",
-                    f"/v1/runs/{quote_path_param(run_id, 'id')}/metrics",
-                    accept="text/event-stream",
-                    headers=headers,
-                    timeout=SSE_READ_TIMEOUT,
-                )
-            except TRANSIENT as exc:
-                failures += 1
-                if failures > MAX_SSE_RECONNECTS:
-                    raise exc
-                if self._expired(deadline):
-                    return
-                self._sleep(min(10.0, retry_ms / 1000 * failures), deadline)
-                continue
-            if "text/event-stream" not in resp.headers.get("content-type", ""):
-                resp.close()
-                yield from self._poll_follow(run_id, deadline, last_seq)
-                return
-            decoder = SSEDecoder()
-            try:
-                for event in iter_sse(self._lines_until(resp, deadline), decoder):
-                    if event.retry is not None:
-                        retry_ms = event.retry
-                    if event.event == "metric":
-                        point = MetricPoint.from_api(_json(event.data), self._client)
-                        seq = point.seq if point.seq is not None else (int(event.id) if event.id and event.id.isdigit() else None)
-                        if seq is not None and last_seq is not None and seq <= last_seq:
-                            continue
-                        if seq is not None:
-                            last_seq = seq
-                        failures = 0
-                        yield "metric", point
-                    elif event.event == "status":
-                        yield "status", Run.from_api(_json(event.data), self._client)
-                        return
-            except (httpx.TransportError, APIConnectionError):
-                pass
-            finally:
-                resp.close()
-            if self._expired(deadline):
-                return
-            failures += 1
-            if failures > MAX_SSE_RECONNECTS:
-                raise APIConnectionError(
-                    f"Lost the metrics stream for run {run_id} {failures} times in a row.",
-                    method="GET",
-                    url=self._client._transport.url(f"/v1/runs/{run_id}/metrics"),
-                )
-            self._sleep(min(10.0, retry_ms / 1000 * failures), deadline)
-
     def _lines_until(self, resp: Any, deadline: float | None) -> Iterator[str]:
         for line in resp.iter_lines():
             yield line
             if self._expired(deadline):
                 return
-
-    def _poll_follow(self, run_id: str, deadline: float | None, last_seq: int | None) -> Iterator[tuple[str, Any]]:
-        # Fallback when a proxy strips the event stream: poll JSON pages with backoff.
-        cursor: str | None = None
-        backoff = h.Backoff()
-        while True:
-            try:
-                page = self._wire.list_run_metrics(run_id, cursor=cursor)
-            except TRANSIENT:
-                page = None
-            if page is not None:
-                data = page.get("data") or []
-                for raw in data:
-                    point = MetricPoint.from_api(raw, self._client)
-                    if last_seq is None or (point.seq or 0) > last_seq:
-                        last_seq = point.seq
-                        yield "metric", point
-                cursor = page.get("tail_cursor") or cursor
-                if data:
-                    backoff.reset()
-                elif page.get("status") in TERMINAL_RUN_STATUSES:
-                    yield "status", self.get(run_id)
-                    return
-            if self._expired(deadline):
-                return
-            self._sleep(backoff.next(), deadline)
 
     def wait(
         self,

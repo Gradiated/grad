@@ -408,24 +408,6 @@ fn handler(r: &Recorded) -> Reply {
                 ),
             ],
         },
-        ("GET", "/v1/runs/run_1/metrics") if sse => Reply::Stream {
-            status: 200,
-            headers: vec![("content-type".into(), "text/event-stream".into())],
-            chunks: vec![
-                (Duration::ZERO, sse_body(&[("metric", Some(1), metric(1))])),
-                (
-                    Duration::from_millis(20),
-                    sse_body(&[
-                        ("metric", Some(2), metric(2)),
-                        (
-                            "status",
-                            None,
-                            run_obj("run_1", "support-router", "completed"),
-                        ),
-                    ]),
-                ),
-            ],
-        },
         ("GET", "/v1/runs/run_1/metrics") => Reply::json(
             200,
             json!({"run_id": "run_1", "status": "completed", "data": [metric(1), metric(2)], "next_cursor": null}),

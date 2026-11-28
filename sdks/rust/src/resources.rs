@@ -11,7 +11,6 @@ use crate::download::{self, DownloadOptions, DownloadedArtifact, TempDir, TempFi
 use crate::error::{Error, Result};
 use crate::events::{RunEvent, RunEventStream, RunEventsPage};
 use crate::models::*;
-use crate::sse::{MetricEvent, MetricStream};
 use crate::transport::{Body, Deadline, Req};
 use crate::usage::{UsageQuery, UsageSummaryQuery};
 use crate::util::{self, check_path_param, encode_segment as seg};
@@ -1306,11 +1305,6 @@ impl Runs<'_> {
         }
     }
 
-    /// Live SSE metrics, resuming after `last_event_id` (a metric `seq`).
-    pub fn stream_metrics(&self, id: &str, last_event_id: Option<String>) -> MetricStream {
-        MetricStream::new(self.c.t().clone(), id.to_string(), last_event_id)
-    }
-
     /// Poll until terminal. `completed` returns the run; `failed`, `cancelled`
     /// `stopped_budget` and `stopped_balance` return [`Error::RunFailed`] carrying the run.
     pub async fn wait(&self, id: &str, opts: &WaitOptions) -> Result<Run> {
@@ -1321,106 +1315,6 @@ impl Runs<'_> {
                 Ok(run) => {
                     if poll.expired() {
                         return Err(poll.timeout_error("run", id, run.status.as_str()));
-                    }
-                }
-                Err(e) => {
-                    poll.on_error(e)?;
-                    if poll.expired() {
-                        return Err(poll.timeout_error("run", id, "unknown"));
-                    }
-                }
-            }
-            poll.sleep().await;
-        }
-    }
-
-    /// Wait for a run while calling `on_metric` for every new metric point.
-    /// Uses the SSE stream and falls back to polling metric pages when the
-    /// stream is unavailable (for example behind a buffering proxy).
-    pub async fn wait_with_metrics(
-        &self,
-        id: &str,
-        opts: &WaitOptions,
-        mut on_metric: impl FnMut(&MetricPoint),
-    ) -> Result<Run> {
-        check_path_param("run id", id)?;
-        let poll = Poller::new(opts);
-        let mut last_seq: i64 = 0;
-        let mut stream = self.stream_metrics(id, None);
-        loop {
-            let next = match poll.remaining() {
-                Some(r) => match tokio::time::timeout(r, stream.next()).await {
-                    Ok(n) => n,
-                    Err(_) => {
-                        let status = self.get(id).await.map(|r| r.status.as_str().to_string());
-                        return Err(poll.timeout_error(
-                            "run",
-                            id,
-                            &status.unwrap_or_else(|_| "unknown".into()),
-                        ));
-                    }
-                },
-                None => stream.next().await,
-            };
-            match next {
-                Some(Ok(MetricEvent::Metric(p))) => {
-                    if p.seq > last_seq {
-                        last_seq = p.seq;
-                        on_metric(&p);
-                    }
-                }
-                Some(Ok(MetricEvent::Finished(run))) => return finish_run(*run),
-                Some(Err(e)) => match e {
-                    Error::Authentication(_) | Error::PermissionDenied(_) | Error::NotFound(_) => {
-                        return Err(e)
-                    }
-                    _ => break,
-                },
-                None => break,
-            }
-        }
-        // Polling fallback.
-        let mut poll = poll;
-        let mut cursor: Option<String> = None;
-        loop {
-            match self
-                .metrics(
-                    id,
-                    &MetricsQuery {
-                        cursor: cursor.clone(),
-                        after_step: None,
-                        limit: Some(LIST_RUN_METRICS_LIMIT_MAX),
-                    },
-                )
-                .await
-            {
-                Ok(page) => {
-                    for p in &page.data {
-                        if p.seq > last_seq {
-                            last_seq = p.seq;
-                            on_metric(p);
-                        }
-                    }
-                    // tail_cursor stays put while no new points arrive, but a
-                    // non-empty page must advance it.
-                    let tail = page.tail_cursor.as_str();
-                    if !tail.is_empty() {
-                        if !page.data.is_empty() && cursor.as_deref() == Some(tail) {
-                            return Err(Error::PaginationLoop {
-                                path: format!("/v1/runs/{}/metrics", id),
-                                cursor: tail.to_string(),
-                            });
-                        }
-                        cursor = Some(tail.to_string());
-                    }
-                    if page.status.is_terminal() {
-                        let run = self.get(id).await?;
-                        if run.status.is_terminal() {
-                            return finish_run(run);
-                        }
-                    }
-                    if poll.expired() {
-                        return Err(poll.timeout_error("run", id, page.status.as_str()));
                     }
                 }
                 Err(e) => {

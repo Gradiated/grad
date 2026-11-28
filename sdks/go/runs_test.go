@@ -260,9 +260,8 @@ func TestRunListCancelResumeCheckpointsPromote(t *testing.T) {
 
 func TestMetricsFollowReconnectsWithLastEventID(t *testing.T) {
 	ctx := context.Background()
-	sse := string(wire(t, "metrics.sse"))
-	blocks := strings.Split(strings.TrimSpace(sse), "\n\n")
-	if len(blocks) != 7 {
+	blocks := strings.Split(strings.TrimSpace(string(wire(t, "run-events.sse"))), "\n\n")
+	if len(blocks) != 25 {
 		t.Fatalf("fixture has %d events", len(blocks))
 	}
 	run := wireMap(t, "run-completed.json")
@@ -270,7 +269,7 @@ func TestMetricsFollowReconnectsWithLastEventID(t *testing.T) {
 	var lastIDs []string
 	connections := 0
 	f := newFake(t, map[string]route{
-		"GET /v1/runs/" + id + "/metrics": func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		"GET /v1/runs/" + id + "/events": func(w http.ResponseWriter, r *http.Request, _ []byte) {
 			if r.Header.Get("Accept") != "text/event-stream" {
 				t.Errorf("accept %q", r.Header.Get("Accept"))
 			}
@@ -279,11 +278,11 @@ func TestMetricsFollowReconnectsWithLastEventID(t *testing.T) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			switch connections {
 			case 1:
-				_, _ = w.Write([]byte(": ping\n\n" + blocks[0] + "\n\n" + blocks[1] + "\n\n"))
+				_, _ = w.Write([]byte(": ping\n\n" + strings.Join(blocks[:8], "\n\n") + "\n\n"))
 			case 2:
 				problem(503, "unavailable")(w, r, nil)
 			default:
-				_, _ = w.Write([]byte(strings.Join(blocks[2:], "\n\n") + "\n\n"))
+				_, _ = w.Write([]byte(strings.Join(blocks[8:], "\n\n") + "\n\n"))
 			}
 		},
 	})
@@ -294,14 +293,11 @@ func TestMetricsFollowReconnectsWithLastEventID(t *testing.T) {
 			t.Fatal(err)
 		}
 		steps = append(steps, m.Step)
-		if m.AdditionalProperties["epoch"] == nil {
-			t.Fatalf("extra metric keys lost: %+v", m)
-		}
 	}
-	if fmt.Sprint(steps) != "[1 2 3 4 5 6]" {
+	if fmt.Sprint(steps) != "[1 2 3]" {
 		t.Fatalf("steps %v", steps)
 	}
-	if fmt.Sprint(lastIDs) != "[ 2 2]" {
+	if fmt.Sprint(lastIDs) != "[ 8 8]" {
 		t.Fatalf("Last-Event-ID per connection %q", lastIDs)
 	}
 	if len(clk.Sleeps()) != 2 {
@@ -323,14 +319,14 @@ func TestMetricsFollowReconnectsWithLastEventID(t *testing.T) {
 }
 
 func TestMetricsFollowGivesUpOnPermanentErrors(t *testing.T) {
-	f := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": problem(404, "run_not_found")})
+	f := newFake(t, map[string]route{"GET /v1/runs/run_x/events": problem(404, "run_not_found")})
 	c, _ := f.client()
 	for _, err := range c.Runs.Metrics(context.Background(), "run_x", true) {
 		if !grad.IsNotFound(err) {
 			t.Fatalf("err %v", err)
 		}
 	}
-	bad := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+	bad := newFake(t, map[string]route{"GET /v1/runs/run_x/events": func(w http.ResponseWriter, _ *http.Request, _ []byte) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("event: metric\nid: 1\ndata: {not json\n\n"))
 	}})

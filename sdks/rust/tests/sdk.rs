@@ -5,7 +5,7 @@ mod support;
 use grad::*;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use support::mock::{self, MockServer, Reply};
 
@@ -465,134 +465,6 @@ async fn wait_backs_off_tolerates_transient_errors_and_types_failures() {
         matches!(e, Error::NotFound(_)),
         "non-transient errors are not retried"
     );
-}
-
-fn sse(events: &[(&str, Option<u64>, Value)]) -> Vec<u8> {
-    let mut out = String::from(": ping\n\n");
-    for (ev, id, data) in events {
-        out.push_str(&format!("event: {}\n", ev));
-        if let Some(id) = id {
-            out.push_str(&format!("id: {}\n", id));
-        }
-        out.push_str(&format!("data: {}\n\n", data));
-    }
-    out.into_bytes()
-}
-
-fn metric(seq: u64, step: u64) -> Value {
-    json!({"seq": seq, "attempt": 1, "step": step, "loss": 1.0 / (step as f64 + 1.0),
-           "tokens": step * 100, "cost_usd": 0.001 * step as f64, "timestamp": "2026-11-27T00:00:00Z"})
-}
-
-#[tokio::test]
-async fn metrics_stream_reconnects_with_last_event_id() {
-    let conns = Arc::new(AtomicUsize::new(0));
-    let c2 = conns.clone();
-    let srv = MockServer::start(move |r| {
-        assert_eq!(r.header("accept"), Some("text/event-stream"));
-        let headers = vec![("content-type".to_string(), "text/event-stream".to_string())];
-        match c2.fetch_add(1, Ordering::SeqCst) {
-            0 => Reply::Stream {
-                status: 200,
-                headers,
-                chunks: vec![
-                    (Duration::ZERO, sse(&[("metric", Some(1), metric(1, 1))])),
-                    // Split an event across chunks and use CRLF line endings.
-                    (
-                        Duration::from_millis(10),
-                        b"event: metric\r\nid: 2\r\ndata: ".to_vec(),
-                    ),
-                    (
-                        Duration::from_millis(10),
-                        format!("{}\r\n\r\n", metric(2, 2)).into_bytes(),
-                    ),
-                ],
-            },
-            1 => {
-                assert_eq!(r.header("last-event-id"), Some("2"));
-                Reply::Stream {
-                    status: 200,
-                    headers,
-                    chunks: vec![(
-                        Duration::ZERO,
-                        sse(&[
-                            ("metric", Some(3), metric(3, 3)),
-                            ("status", None, run_json("r1", "completed")),
-                        ]),
-                    )],
-                }
-            }
-            _ => panic!("no third connection expected"),
-        }
-    });
-    let c = client(&srv.url);
-    let mut stream = c
-        .runs()
-        .stream_metrics("r1", None)
-        .reconnect_base(Duration::from_millis(5));
-    let mut steps = vec![];
-    let mut finished = None;
-    while let Some(ev) = stream.next().await {
-        match ev.unwrap() {
-            MetricEvent::Metric(p) => steps.push(p.step),
-            MetricEvent::Finished(run) => finished = Some(run),
-        }
-    }
-    assert_eq!(steps, vec![1, 2, 3]);
-    assert_eq!(finished.unwrap().status, RunStatus::Completed);
-    assert_eq!(stream.last_event_id(), Some("3"));
-    assert_eq!(conns.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn wait_with_metrics_falls_back_to_polling() {
-    let polls = Arc::new(AtomicUsize::new(0));
-    let p2 = polls.clone();
-    let srv = MockServer::start(move |r| {
-        let sse_req = r.header("accept") == Some("text/event-stream");
-        match r.path() {
-            // A buffering proxy answers the SSE request with JSON.
-            "/v1/runs/r1/metrics" if sse_req => Reply::json(200, json!({"data": []})),
-            "/v1/runs/r1/metrics" => {
-                let i = p2.fetch_add(1, Ordering::SeqCst);
-                let (data, status, tail) = match i {
-                    0 => (vec![metric(1, 1), metric(2, 2)], "running", "c2"),
-                    _ => (vec![metric(2, 2), metric(3, 3)], "completed", "c3"),
-                };
-                Reply::json(
-                    200,
-                    json!({"run_id": "r1", "status": status, "data": data, "next_cursor": null, "tail_cursor": tail}),
-                )
-            }
-            "/v1/runs/r1" => Reply::json(200, run_json("r1", "completed")),
-            "/v1/runs/r2/metrics" => Reply::problem(404, "run_not_found", "no such run"),
-            _ => Reply::problem(404, "nf", "nf"),
-        }
-    });
-    let c = client(&srv.url);
-    let seen = Mutex::new(vec![]);
-    let run = c
-        .runs()
-        .wait_with_metrics("r1", &fast_wait(), |m| seen.lock().unwrap().push(m.seq))
-        .await
-        .unwrap();
-    assert_eq!(run.status, RunStatus::Completed);
-    assert_eq!(
-        *seen.lock().unwrap(),
-        vec![1, 2, 3],
-        "duplicates are skipped"
-    );
-    assert!(srv
-        .requests()
-        .iter()
-        .any(|r| r.query().contains("cursor=c2")));
-
-    let e = c
-        .runs()
-        .wait_with_metrics("r2", &fast_wait(), |_| {})
-        .await
-        .unwrap_err();
-    assert!(matches!(e, Error::NotFound(_)));
 }
 
 #[test]
@@ -1244,11 +1116,6 @@ fn is_loop(e: &Error, cursor: &str) -> bool {
 #[tokio::test]
 async fn pagers_stop_on_a_repeated_cursor() {
     let srv = MockServer::start(|r| match r.path() {
-        "/v1/runs/r1/metrics" => Reply::json(
-            200,
-            json!({"run_id": "r1", "status": "running", "data": [metric(1, 1)], "next_cursor": null, "tail_cursor": "same"}),
-        ),
-        "/v1/runs/r1" => Reply::json(200, run_json("r1", "running")),
         "/v1/runs" | "/v1/datasets" | "/v1/keys" => Reply::json(
             200,
             json!({"data": [{"id": "r1", "name": "a", "version": 1, "record_count": 1,
@@ -1274,24 +1141,10 @@ async fn pagers_stop_on_a_repeated_cursor() {
     assert!(is_loop(&e, "same"), "{:?}", e);
     let e = c.keys().list_all().await.unwrap_err();
     assert!(is_loop(&e, "same"), "{:?}", e);
-
-    // The metrics tail: a non-empty page that does not advance the cursor.
-    let before = srv.requests().len();
-    let e = c
-        .runs()
-        .wait_with_metrics("r1", &fast_wait(), |_| {})
-        .await
-        .unwrap_err();
-    assert!(is_loop(&e, "same"), "{:?}", e);
-    let polls = srv.requests()[before..]
-        .iter()
-        .filter(|r| r.path() == "/v1/runs/r1/metrics")
-        .count();
-    assert!(polls <= 3, "metrics polls: {}", polls);
 }
 
 #[tokio::test]
-async fn pagers_stop_on_an_empty_page_and_tail_tolerates_an_echoed_cursor() {
+async fn pagers_stop_on_an_empty_page() {
     let n = Arc::new(AtomicUsize::new(0));
     let n2 = n.clone();
     let srv = MockServer::start(move |r| match r.path() {
@@ -1299,21 +1152,6 @@ async fn pagers_stop_on_an_empty_page_and_tail_tolerates_an_echoed_cursor() {
         "/v1/runs" => {
             let i = n2.fetch_add(1, Ordering::SeqCst);
             Reply::json(200, json!({"data": [], "next_cursor": format!("c{}", i)}))
-        }
-        // Tail: empty pages echo the cursor until the run completes.
-        "/v1/runs/r1/metrics" => {
-            let i = n2.fetch_add(1, Ordering::SeqCst);
-            if i < 4 {
-                Reply::json(
-                    200,
-                    json!({"run_id": "r1", "status": "running", "data": [], "next_cursor": null, "tail_cursor": "t1"}),
-                )
-            } else {
-                Reply::json(
-                    200,
-                    json!({"run_id": "r1", "status": "completed", "data": [metric(1, 1)], "next_cursor": null, "tail_cursor": "t2"}),
-                )
-            }
         }
         "/v1/runs/r1" => Reply::json(200, run_json("r1", "completed")),
         _ => Reply::problem(404, "nf", "nf"),
@@ -1323,12 +1161,6 @@ async fn pagers_stop_on_an_empty_page_and_tail_tolerates_an_echoed_cursor() {
     assert_eq!(srv.requests().len(), 1);
     assert!(c.runs().find_by_name("x").await.unwrap().is_none());
     assert_eq!(srv.requests().len(), 2);
-    let run = c
-        .runs()
-        .wait_with_metrics("r1", &fast_wait(), |_| {})
-        .await
-        .unwrap();
-    assert_eq!(run.status, RunStatus::Completed);
 }
 
 #[tokio::test]

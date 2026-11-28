@@ -1,8 +1,8 @@
 //! `grad train` and `grad runs`.
 
 use grad_sdk::{
-    Artifact, AttemptKind, Client, Error as SdkError, EvalReport, MetricEvent, MetricPoint,
-    MetricsQuery, PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunPhase, RunStatus,
+    Artifact, AttemptKind, Client, Error as SdkError, EvalReport, MetricPoint, MetricsQuery,
+    PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunPhase, RunStatus,
 };
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -1061,26 +1061,28 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
                 return out.done(&pg);
             }
             on_interrupt(format!("stopped following run {}", r.id));
-            let mut stream = c.runs().stream_metrics(&r.id, None);
+            let mut stream = c.runs().events(&r.id, true);
             let mut collected = Vec::new();
             if !out.json {
                 out.line(METRIC_HEADERS.map(|h| h.to_uppercase()).join("  "));
             }
             while let Some(ev) = stream.next().await {
                 match ev? {
-                    MetricEvent::Metric(m) => {
+                    RunEvent::Metric(m) => {
+                        let m = m.metric;
                         if after_step.is_some_and(|a| m.step <= a) {
                             continue;
                         }
                         if !out.json {
                             out.line(metric_rows(std::slice::from_ref(&m))[0].join("  "));
                         }
-                        collected.push(*m);
+                        collected.push(m);
                     }
-                    MetricEvent::Finished(run) => {
-                        out.note(format!("run {} {}", run.id, run.status));
-                        return out.done(&json!({ "run": run, "metrics": collected }));
+                    RunEvent::Completed(done) => {
+                        out.note(format!("run {} {}", done.run.id, done.run.status));
+                        return out.done(&json!({ "run": done.run, "metrics": collected }));
                     }
+                    _ => {}
                 }
             }
             out.done(&json!({ "metrics": collected }))
