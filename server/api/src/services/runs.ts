@@ -747,16 +747,14 @@ export const createRunLifecycle = (
     },
     onLeaseLost: async (row: JobRow, fence, now) => {
       const run = await loadById(row.id);
-      // Re-checks expiry: a heartbeat that landed after the SELECT wins.
+      // The queue's fence re-checks expiry: a heartbeat that landed after
+      // the reaper's read wins.
       await store.transaction(() =>
         interrupt(run, {
           reason: "lease_lost",
           tokens: run.attempt_tokens,
           now: now.toISOString(),
-          fence: {
-            ...fenceOf(run),
-            leaseExpiredBefore: fence.leaseExpiredBefore as string,
-          },
+          fence,
         }),
       );
     },
