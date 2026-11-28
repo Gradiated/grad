@@ -1,8 +1,18 @@
-import type { Artifact, ArtifactPin } from "../contracts.js";
+import { addSeconds } from "../clock.js";
+import type {
+  Artifact,
+  ArtifactDownloadUrl,
+  ArtifactPin,
+} from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { ApiError, notFound } from "../errors.js";
 import { log } from "../telemetry/log.js";
-import type { ArtifactRecord } from "../store/types.js";
+import type {
+  ArtifactRecord,
+  ListFilter,
+  Page,
+  PageRequest,
+} from "../store/types.js";
 
 /**
  * The artifact registry: reading a release, deleting it and pinning it.
@@ -14,6 +24,26 @@ import type { ArtifactRecord } from "../store/types.js";
 export interface ArtifactService {
   /** A release (or checkpoint) by id or `name@version|latest`, else 404. */
   get(workspaceId: string, reference: string): Promise<ArtifactRecord>;
+  /** Releases, newest first. */
+  list(
+    workspaceId: string,
+    filter: ListFilter & { name?: string | undefined },
+    page: PageRequest,
+  ): Promise<Page<Artifact>>;
+  /** A presigned GET of the bundle a browser or SDK downloads directly. */
+  downloadUrl(
+    workspaceId: string,
+    reference: string,
+  ): Promise<ArtifactDownloadUrl>;
+  /** The bundle's bytes, streamed from storage, and the file name to save it as. */
+  download(
+    workspaceId: string,
+    reference: string,
+  ): Promise<{
+    artifact: ArtifactRecord;
+    filename: string;
+    stream: ReadableStream<Uint8Array>;
+  }>;
   /** 409 `artifact_pinned` (naming the holders) while it is pinned. */
   delete(workspaceId: string, reference: string): Promise<void>;
   pin(
@@ -29,6 +59,13 @@ export const toPublicArtifact = ({
   storage_key: _key,
   ...artifact
 }: ArtifactRecord): Artifact => artifact;
+
+/** What a downloaded bundle is called: `support-router-2026-11-27-1.grad.tar.gz`. */
+const bundleFilename = (a: { name: string; version: string }): string =>
+  `${a.name}-${a.version}.grad.tar.gz`;
+
+/** How long a download URL stays valid. */
+const DOWNLOAD_URL_SECONDS = 900;
 
 const describePins = (pins: readonly ArtifactPin[]): string =>
   pins.map((p) => `${p.holder} (${p.reason})`).join(", ");
@@ -93,6 +130,45 @@ export const createArtifactService = (
 
   return {
     get,
+
+    list: async (workspaceId, filter, page) => {
+      const result = await store.artifacts.list(workspaceId, filter, page);
+
+      return {
+        data: result.data.map(toPublicArtifact),
+        next_cursor: result.next_cursor,
+      };
+    },
+
+    downloadUrl: async (workspaceId, reference) => {
+      const artifact = await get(workspaceId, reference);
+      const filename = bundleFilename(artifact);
+
+      return {
+        url: await storage.presignDownload(
+          artifact.storage_key,
+          DOWNLOAD_URL_SECONDS,
+          { forClient: true, filename },
+        ),
+        expires_at: addSeconds(
+          deps.clock.now(),
+          DOWNLOAD_URL_SECONDS,
+        ).toISOString(),
+        sha256: artifact.sha256,
+        size_bytes: artifact.size_bytes,
+        filename,
+      };
+    },
+
+    download: async (workspaceId, reference) => {
+      const artifact = await get(workspaceId, reference);
+
+      return {
+        artifact,
+        filename: bundleFilename(artifact),
+        stream: await storage.getStream(artifact.storage_key),
+      };
+    },
 
     delete: async (workspaceId, reference) => {
       const { id } = await get(workspaceId, reference);

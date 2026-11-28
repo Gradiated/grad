@@ -15,7 +15,6 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { forbidden } from "../errors.js";
-import { addSeconds } from "../clock.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
@@ -30,10 +29,6 @@ import {
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
-
-/** What a downloaded bundle is called: `support-router-2026-11-27-1.grad.tar.gz`. */
-const bundleFilename = (a: { name: string; version: string }): string =>
-  `${a.name}-${a.version}.grad.tar.gz`;
 
 /** Holders Gradiated Cloud's inference side pins with (model versions). */
 const INFERENCE_HOLDER_PREFIX = "inference:";
@@ -66,17 +61,12 @@ export const registerArtifactRoutes = (
     async (c) => {
       const workspaceId = workspaceOf(c, "artifacts:read");
       const { name, q, limit, cursor } = c.req.valid("query");
-      const result = await deps.store.artifacts.list(
-        workspaceId,
-        { name, q },
-        { limit, cursor },
-      );
-
       return c.json(
-        {
-          data: result.data.map(toPublicArtifact),
-          next_cursor: result.next_cursor,
-        },
+        await services.artifacts.list(
+          workspaceId,
+          { name, q },
+          { limit, cursor },
+        ),
         200,
       );
     },
@@ -122,25 +112,11 @@ export const registerArtifactRoutes = (
       },
     }),
     async (c) => {
-      const artifact = await services.artifacts.get(
-        workspaceOf(c, "artifacts:read"),
-        c.req.valid("param").id,
-      );
-      const seconds = 900;
-      const filename = bundleFilename(artifact);
-
       return c.json(
-        {
-          url: await deps.storage.presignDownload(
-            artifact.storage_key,
-            seconds,
-            { forClient: true, filename },
-          ),
-          expires_at: addSeconds(deps.clock.now(), seconds).toISOString(),
-          sha256: artifact.sha256,
-          size_bytes: artifact.size_bytes,
-          filename,
-        },
+        await services.artifacts.downloadUrl(
+          workspaceOf(c, "artifacts:read"),
+          c.req.valid("param").id,
+        ),
         200,
         { "Cache-Control": "no-store" },
       );
@@ -169,11 +145,10 @@ export const registerArtifactRoutes = (
       },
     }),
     async (c) => {
-      const artifact = await services.artifacts.get(
+      const { artifact, filename, stream } = await services.artifacts.download(
         workspaceOf(c, "artifacts:read"),
         c.req.valid("param").id,
       );
-      const stream = await deps.storage.getStream(artifact.storage_key);
 
       return new Response(stream, {
         status: 200,
@@ -182,9 +157,7 @@ export const registerArtifactRoutes = (
           "Content-Length": String(artifact.size_bytes),
           "X-Content-Type-Options": "nosniff",
           "X-Artifact-Sha256": artifact.sha256,
-          "Content-Disposition": attachmentDisposition(
-            bundleFilename(artifact),
-          ),
+          "Content-Disposition": attachmentDisposition(filename),
         },
       });
     },

@@ -20,6 +20,7 @@ import {
 } from "./routes/helpers.js";
 import { registerModelsAndKeysRoutes } from "./routes/keys.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerSecretRoutes } from "./routes/secrets.js";
 import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { registerUsageRoutes } from "./routes/usage.js";
@@ -353,12 +354,13 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   registerModelsAndKeysRoutes(app, deps);
   registerDatasetRoutes(app, services);
   registerRunRoutes(app, deps, services);
-  registerCheckpointRoutes(app, deps, services);
+  registerCheckpointRoutes(app, services);
   registerTrainerJobRoutes(app, services);
   registerArtifactRoutes(app, deps, services);
   registerUsageRoutes(app, services);
-  registerEvalRoutes(app, deps, services);
-  registerSourceRoutes(app, deps, services);
+  registerEvalRoutes(app, services);
+  registerSecretRoutes(app, services);
+  registerSourceRoutes(app, services);
 
   app.doc31("/openapi.json", {
     openapi: "3.1.0",

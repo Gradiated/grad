@@ -14,7 +14,6 @@ import {
   PostEvalScoresRequestSchema,
   PostEvalScoresResponseSchema,
 } from "../contracts.js";
-import type { AppDependencies } from "../deps.js";
 import type { Services } from "../services/index.js";
 import {
   defaultErrors,
@@ -31,7 +30,6 @@ const ModelFilterSchema = z.string().min(1).max(200).optional();
 
 export const registerEvalRoutes = (
   app: OpenAPIHono<AppEnv>,
-  _deps: AppDependencies,
   services: Services,
 ): void => {
   const evals = services.evals;

@@ -7,7 +7,6 @@ import {
   PageQuerySchema,
   PromoteCheckpointRequestSchema,
 } from "../contracts.js";
-import type { AppDependencies } from "../deps.js";
 import type { Services } from "../services/index.js";
 import {
   defaultErrors,
@@ -19,7 +18,6 @@ import {
 
 export const registerCheckpointRoutes = (
   app: OpenAPIHono<AppEnv>,
-  _deps: AppDependencies,
   services: Services,
 ): void => {
   const tags = ["Checkpoints"];
