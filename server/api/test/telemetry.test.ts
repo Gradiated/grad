@@ -218,6 +218,62 @@ describe("Prometheus metrics", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
+  it("times each phase of a run attempt, from the queue to completion", async () => {
+    const before = await scrape(t);
+    await createSftRun(t);
+    t.clock.advanceSeconds(12);
+    const job = (await worker.claim())!;
+    const phase = async (name: string, step = 0) => {
+      const res = await worker.call(`/v1/trainer-jobs/${job.id}/events`, {
+        ...worker.ref(job),
+        type: "phase",
+        phase: name,
+        step,
+      });
+      expect(res.status).toBe(204);
+    };
+    t.clock.advanceSeconds(2);
+    await phase("loading_model");
+    t.clock.advanceSeconds(40);
+    await phase("training");
+    t.clock.advanceSeconds(1);
+    await phase("training"); // a retried report ends nothing
+    t.clock.advanceSeconds(299);
+    await phase("uploading", 10);
+    t.clock.advanceSeconds(5);
+    await phase("completing", 10);
+    t.clock.advanceSeconds(1);
+    await worker.complete(
+      job,
+      { status: "completed", tokens_processed: 1000 },
+      "artifact",
+    );
+
+    const after = await scrape(t);
+    const seconds = (p: string, stat: "sum" | "count") =>
+      value(after, `grad_run_phase_duration_seconds_${stat}`, { phase: p }) -
+      value(before, `grad_run_phase_duration_seconds_${stat}`, { phase: p });
+    expect(
+      Object.fromEntries(
+        [
+          "queued",
+          "starting",
+          "loading_model",
+          "training",
+          "uploading",
+          "completing",
+        ].map((p) => [p, [seconds(p, "sum"), seconds(p, "count")]]),
+      ),
+    ).toEqual({
+      queued: [12, 1],
+      starting: [2, 1],
+      loading_model: [40, 1],
+      training: [300, 1],
+      uploading: [5, 1],
+      completing: [1, 1],
+    });
+  });
+
   it("counts error codes, worker auth, failures by error code and the maintenance tick", async () => {
     const { done } = await exercise();
     expect(

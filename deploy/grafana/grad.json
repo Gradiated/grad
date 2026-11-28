@@ -1265,8 +1265,8 @@
     {
       "type": "timeseries",
       "id": 22,
-      "title": "Attempts started and interrupted",
-      "description": "Interruptions by reason: compute_reclaimed (preemption, handed back), lease_lost (lease expired: a lost worker), worker_error, oom.",
+      "title": "Time per run phase (p50, p95)",
+      "description": "How long run attempts spend in each phase. queued and waiting_for_compute: waiting for a worker; starting: claim to the worker's first report; loading_model: claim to the first step (dataset and weight downloads, loading the weights, tokenizing); then training, evaluating, checkpointing, uploading (the final export) and completing.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1276,6 +1276,126 @@
         "w": 8,
         "x": 8,
         "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, phase) (rate(grad_run_phase_duration_seconds_bucket{namespace=~\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{phase}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(grad_run_phase_duration_seconds_bucket{namespace=~\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{phase}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 23,
+      "title": "Leased GPU time by phase",
+      "description": "Share of the time workers hold a run (claim to completion) spent in each phase. Everything but training (and the evaluations the run asked for) is dead time on a GPU: setup, the final export and upload, completing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "(sum by (phase) (rate(grad_run_phase_duration_seconds_sum{namespace=~\"$namespace\", phase!~\"queued|waiting_for_compute\"}[$__rate_interval]))) / clamp_min(sum (rate(grad_run_phase_duration_seconds_sum{namespace=~\"$namespace\", phase!~\"queued|waiting_for_compute\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "{{phase}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 24,
+      "title": "Attempts started and interrupted",
+      "description": "Interruptions by reason: compute_reclaimed (preemption, handed back), lease_lost (lease expired: a lost worker), worker_error, oom.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 39
       },
       "targets": [
         {
@@ -1330,7 +1450,7 @@
     },
     {
       "type": "timeseries",
-      "id": 23,
+      "id": 25,
       "title": "Reclaims and emergency checkpoints",
       "description": "Train attempts handed back because compute was reclaimed, the emergency checkpoints that made it in, and those workers failed to save (grad_trainer_*: scraped workers only).",
       "datasource": {
@@ -1340,8 +1460,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 31
+        "x": 8,
+        "y": 39
       },
       "targets": [
         {
@@ -1407,7 +1527,7 @@
     },
     {
       "type": "timeseries",
-      "id": 24,
+      "id": 26,
       "title": "Lease expiries and fencing rejections",
       "description": "Leases the reaper expired, and worker writes refused because the attempt's lease is gone or bound elsewhere (409 lease_lost, 403 worker_host_mismatch).",
       "datasource": {
@@ -1417,7 +1537,7 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 39
       },
       "targets": [
@@ -1473,7 +1593,7 @@
     },
     {
       "type": "timeseries",
-      "id": 25,
+      "id": 27,
       "title": "Usage flush lag",
       "description": "Longest a running attempt has gone without writing usage (a stalled worker or failing billing writes).",
       "datasource": {
@@ -1483,8 +1603,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 39
+        "x": 0,
+        "y": 47
       },
       "targets": [
         {
@@ -1528,20 +1648,20 @@
     },
     {
       "type": "row",
-      "id": 26,
+      "id": 28,
       "title": "Workers & GPUs",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 55
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 27,
+      "id": 29,
       "title": "Workers online by kind",
       "description": "Workers holding an unexpired lease (server view).",
       "datasource": {
@@ -1552,7 +1672,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 48
+        "y": 56
       },
       "targets": [
         {
@@ -1596,7 +1716,7 @@
     },
     {
       "type": "timeseries",
-      "id": 28,
+      "id": 30,
       "title": "Worker pods ready by pool",
       "description": "Kubernetes only (kube-state-metrics).",
       "datasource": {
@@ -1607,7 +1727,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 48
+        "y": 56
       },
       "targets": [
         {
@@ -1651,7 +1771,7 @@
     },
     {
       "type": "timeseries",
-      "id": 29,
+      "id": 31,
       "title": "Workers by phase",
       "description": "",
       "datasource": {
@@ -1662,7 +1782,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 48
+        "y": 56
       },
       "targets": [
         {
@@ -1706,7 +1826,7 @@
     },
     {
       "type": "timeseries",
-      "id": 30,
+      "id": 32,
       "title": "Heartbeats/s",
       "description": "",
       "datasource": {
@@ -1717,7 +1837,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 56
+        "y": 64
       },
       "targets": [
         {
@@ -1761,7 +1881,7 @@
     },
     {
       "type": "timeseries",
-      "id": 31,
+      "id": 33,
       "title": "Training throughput (tokens/s)",
       "description": "Server-counted from usage, by recipe, and the sum workers last reported.",
       "datasource": {
@@ -1772,7 +1892,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 56
+        "y": 64
       },
       "targets": [
         {
@@ -1827,7 +1947,7 @@
     },
     {
       "type": "timeseries",
-      "id": 32,
+      "id": 34,
       "title": "Step time (p50, p95)",
       "description": "Time between training steps (scraped workers).",
       "datasource": {
@@ -1838,7 +1958,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 56
+        "y": 64
       },
       "targets": [
         {
@@ -1893,7 +2013,7 @@
     },
     {
       "type": "timeseries",
-      "id": 33,
+      "id": 35,
       "title": "GPU utilisation",
       "description": "Per GPU from NVML on scraped workers; the server's mean over heartbeats otherwise. Install NVIDIA's dcgm-exporter for SM occupancy, temperatures and XID errors.",
       "datasource": {
@@ -1904,7 +2024,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 64
+        "y": 72
       },
       "targets": [
         {
@@ -1961,7 +2081,7 @@
     },
     {
       "type": "timeseries",
-      "id": 34,
+      "id": 36,
       "title": "GPU memory in use",
       "description": "",
       "datasource": {
@@ -1972,7 +2092,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 64
+        "y": 72
       },
       "targets": [
         {
@@ -2027,7 +2147,7 @@
     },
     {
       "type": "timeseries",
-      "id": 35,
+      "id": 37,
       "title": "Checkpoints by reason and result",
       "description": "Registered checkpoints (server) and those scraped workers failed to save.",
       "datasource": {
@@ -2038,7 +2158,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 64
+        "y": 72
       },
       "targets": [
         {
@@ -2093,7 +2213,7 @@
     },
     {
       "type": "timeseries",
-      "id": 36,
+      "id": 38,
       "title": "Checkpoint upload throughput",
       "description": "",
       "datasource": {
@@ -2104,7 +2224,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 72
+        "y": 80
       },
       "targets": [
         {
@@ -2148,7 +2268,7 @@
     },
     {
       "type": "timeseries",
-      "id": 37,
+      "id": 39,
       "title": "Checkpoint upload time (p50, p95)",
       "description": "",
       "datasource": {
@@ -2159,7 +2279,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 72
+        "y": 80
       },
       "targets": [
         {
@@ -2214,7 +2334,7 @@
     },
     {
       "type": "timeseries",
-      "id": 38,
+      "id": 40,
       "title": "Worker jobs finished by status",
       "description": "Attempts scraped workers finished, by kind and status.",
       "datasource": {
@@ -2225,7 +2345,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 72
+        "y": 80
       },
       "targets": [
         {
@@ -2269,20 +2389,20 @@
     },
     {
       "type": "row",
-      "id": 39,
+      "id": 41,
       "title": "Evals",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 88
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 40,
+      "id": 42,
       "title": "Evals by state",
       "description": "",
       "datasource": {
@@ -2293,7 +2413,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 81
+        "y": 89
       },
       "targets": [
         {
@@ -2337,7 +2457,7 @@
     },
     {
       "type": "timeseries",
-      "id": 41,
+      "id": 43,
       "title": "Evals finished by status",
       "description": "",
       "datasource": {
@@ -2348,7 +2468,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 81
+        "y": 89
       },
       "targets": [
         {
@@ -2392,7 +2512,7 @@
     },
     {
       "type": "timeseries",
-      "id": 42,
+      "id": 44,
       "title": "Eval duration and wait (p50, p95)",
       "description": "",
       "datasource": {
@@ -2403,7 +2523,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 81
+        "y": 89
       },
       "targets": [
         {
@@ -2469,7 +2589,7 @@
     },
     {
       "type": "timeseries",
-      "id": 43,
+      "id": 45,
       "title": "Model outputs and judge calls/s",
       "description": "",
       "datasource": {
@@ -2480,7 +2600,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 89
+        "y": 97
       },
       "targets": [
         {
@@ -2535,7 +2655,7 @@
     },
     {
       "type": "timeseries",
-      "id": 44,
+      "id": 46,
       "title": "Inference errors by reason",
       "description": "Failed model and judge calls after retries: rate_limited (429 from the gateway's eval lane), capacity_unavailable (no serving capacity, e.g. a pool waking from zero), timeout, unreachable, server_error, rejected (4xx), malformed.",
       "datasource": {
@@ -2546,7 +2666,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 89
+        "y": 97
       },
       "targets": [
         {
@@ -2590,7 +2710,7 @@
     },
     {
       "type": "timeseries",
-      "id": 45,
+      "id": 47,
       "title": "Inference error ratio",
       "description": "",
       "datasource": {
@@ -2601,7 +2721,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 89
+        "y": 97
       },
       "targets": [
         {
@@ -2658,20 +2778,20 @@
     },
     {
       "type": "row",
-      "id": 46,
+      "id": 48,
       "title": "Sources",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 97
+        "y": 105
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 47,
+      "id": 49,
       "title": "Syncs finished by provider and status",
       "description": "",
       "datasource": {
@@ -2682,7 +2802,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 98
+        "y": 106
       },
       "targets": [
         {
@@ -2726,7 +2846,7 @@
     },
     {
       "type": "timeseries",
-      "id": 48,
+      "id": 50,
       "title": "Records and score updates/s",
       "description": "",
       "datasource": {
@@ -2737,7 +2857,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 98
+        "y": 106
       },
       "targets": [
         {
@@ -2792,7 +2912,7 @@
     },
     {
       "type": "timeseries",
-      "id": 49,
+      "id": 51,
       "title": "Sync lag by provider",
       "description": "Longest an active scheduled source has gone without a successful sync.",
       "datasource": {
@@ -2803,7 +2923,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 98
+        "y": 106
       },
       "targets": [
         {
@@ -2847,7 +2967,7 @@
     },
     {
       "type": "timeseries",
-      "id": 50,
+      "id": 52,
       "title": "Failing and paused sources",
       "description": "Most consecutive failed syncs of any source, and sources paused after repeated failures.",
       "datasource": {
@@ -2858,7 +2978,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 106
+        "y": 114
       },
       "targets": [
         {
@@ -2913,7 +3033,7 @@
     },
     {
       "type": "timeseries",
-      "id": 51,
+      "id": 53,
       "title": "Sync duration (p95) and open syncs",
       "description": "",
       "datasource": {
@@ -2924,7 +3044,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 106
+        "y": 114
       },
       "targets": [
         {
@@ -2979,7 +3099,7 @@
     },
     {
       "type": "timeseries",
-      "id": 52,
+      "id": 54,
       "title": "Import records/s and dataset bytes",
       "description": "",
       "datasource": {
@@ -2990,7 +3110,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 106
+        "y": 114
       },
       "targets": [
         {
@@ -3045,20 +3165,20 @@
     },
     {
       "type": "row",
-      "id": 53,
+      "id": 55,
       "title": "Billing & usage (Cloud)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 114
+        "y": 122
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 54,
+      "id": 56,
       "title": "Usage push lag and backlog",
       "description": "Cloud: age of the oldest ledger row not yet pushed to billing, and the rows waiting.",
       "datasource": {
@@ -3069,7 +3189,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 115
+        "y": 123
       },
       "targets": [
         {
@@ -3124,7 +3244,7 @@
     },
     {
       "type": "timeseries",
-      "id": 55,
+      "id": 57,
       "title": "Usage push failures/min",
       "description": "",
       "datasource": {
@@ -3135,7 +3255,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 115
+        "y": 123
       },
       "targets": [
         {
@@ -3179,7 +3299,7 @@
     },
     {
       "type": "timeseries",
-      "id": 56,
+      "id": 58,
       "title": "Parked usage rows",
       "description": "Cloud: ledger rows billing ingest refused for good (422/409). The rest keep exporting; retry these by hand once the cause is fixed (CLOUD_MODE.md).",
       "datasource": {
@@ -3190,7 +3310,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 115
+        "y": 123
       },
       "targets": [
         {
@@ -3234,7 +3354,7 @@
     },
     {
       "type": "timeseries",
-      "id": 57,
+      "id": 59,
       "title": "Balance checks by op and result",
       "description": "start: a new run or eval (refused: 402-style insufficient balance); continue: a running job's heartbeat (refused: the job stops as stopped_balance). Errors never stop running work.",
       "datasource": {
@@ -3245,7 +3365,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 123
+        "y": 131
       },
       "targets": [
         {
@@ -3289,7 +3409,7 @@
     },
     {
       "type": "timeseries",
-      "id": 58,
+      "id": 60,
       "title": "Balance stops",
       "description": "Runs that stopped because the workspace ran out of balance.",
       "datasource": {
@@ -3300,7 +3420,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 123
+        "y": 131
       },
       "targets": [
         {
@@ -3344,7 +3464,7 @@
     },
     {
       "type": "timeseries",
-      "id": 59,
+      "id": 61,
       "title": "Price list age",
       "description": "Cloud: since the price list was last confirmed; past 24 h new runs and evals are refused (503 billing_unavailable).",
       "datasource": {
@@ -3355,7 +3475,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 123
+        "y": 131
       },
       "targets": [
         {
@@ -3399,7 +3519,7 @@
     },
     {
       "type": "timeseries",
-      "id": 60,
+      "id": 62,
       "title": "Billed cost per hour",
       "description": "",
       "datasource": {
@@ -3410,7 +3530,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 131
+        "y": 139
       },
       "targets": [
         {
@@ -3454,20 +3574,20 @@
     },
     {
       "type": "row",
-      "id": 61,
+      "id": 63,
       "title": "Auth & security",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 139
+        "y": 147
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 62,
+      "id": 64,
       "title": "Worker auth by mode and result",
       "description": "Worker-protocol requests: mode static, kubernetes (TokenReview) or lease; none = no worker credential (rejected).",
       "datasource": {
@@ -3478,7 +3598,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 140
+        "y": 148
       },
       "targets": [
         {
@@ -3522,7 +3642,7 @@
     },
     {
       "type": "timeseries",
-      "id": 63,
+      "id": 65,
       "title": "TokenReviews by result",
       "description": "saturated: refused because 8 reviews were already in flight on the replica (503 worker_auth_unavailable).",
       "datasource": {
@@ -3533,7 +3653,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 140
+        "y": 148
       },
       "targets": [
         {
@@ -3588,7 +3708,7 @@
     },
     {
       "type": "timeseries",
-      "id": 64,
+      "id": 66,
       "title": "TokenReview latency (p50, p95)",
       "description": "",
       "datasource": {
@@ -3599,7 +3719,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 140
+        "y": 148
       },
       "targets": [
         {
@@ -3654,7 +3774,7 @@
     },
     {
       "type": "timeseries",
-      "id": 65,
+      "id": 67,
       "title": "Credential cache hit ratio",
       "description": "cloud_key: the Cloud API-key cache (5 s); kubernetes: reviewed service-account tokens (60 s).",
       "datasource": {
@@ -3665,7 +3785,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 148
+        "y": 156
       },
       "targets": [
         {
@@ -3711,7 +3831,7 @@
     },
     {
       "type": "timeseries",
-      "id": 66,
+      "id": 68,
       "title": "Auth errors by code",
       "description": "401/403/503 answers about credentials: unauthorized, forbidden (scope), auth_unavailable (Cloud auth view down), worker_auth_unavailable, workspace_suspended, ...",
       "datasource": {
@@ -3722,7 +3842,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 148
+        "y": 156
       },
       "targets": [
         {
@@ -3766,7 +3886,7 @@
     },
     {
       "type": "timeseries",
-      "id": 67,
+      "id": 69,
       "title": "Cloud API-key lookups",
       "description": "",
       "datasource": {
@@ -3777,7 +3897,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 148
+        "y": 156
       },
       "targets": [
         {
@@ -3821,20 +3941,20 @@
     },
     {
       "type": "row",
-      "id": 68,
+      "id": 70,
       "title": "API & SSE",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 156
+        "y": 164
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 69,
+      "id": 71,
       "title": "Requests by status class",
       "description": "",
       "datasource": {
@@ -3845,7 +3965,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 157
+        "y": 165
       },
       "targets": [
         {
@@ -3889,7 +4009,7 @@
     },
     {
       "type": "timeseries",
-      "id": 70,
+      "id": 72,
       "title": "p95 latency by route",
       "description": "",
       "datasource": {
@@ -3900,7 +4020,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 157
+        "y": 165
       },
       "targets": [
         {
@@ -3944,7 +4064,7 @@
     },
     {
       "type": "timeseries",
-      "id": 71,
+      "id": 73,
       "title": "5xx by route",
       "description": "",
       "datasource": {
@@ -3955,7 +4075,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 157
+        "y": 165
       },
       "targets": [
         {
@@ -3999,7 +4119,7 @@
     },
     {
       "type": "timeseries",
-      "id": 72,
+      "id": 74,
       "title": "Errors by code",
       "description": "Every problem+json error response by its code.",
       "datasource": {
@@ -4010,7 +4130,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 165
+        "y": 173
       },
       "targets": [
         {
@@ -4054,7 +4174,7 @@
     },
     {
       "type": "timeseries",
-      "id": 73,
+      "id": 75,
       "title": "Requests in flight",
       "description": "",
       "datasource": {
@@ -4065,7 +4185,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 165
+        "y": 173
       },
       "targets": [
         {
@@ -4109,7 +4229,7 @@
     },
     {
       "type": "timeseries",
-      "id": 74,
+      "id": 76,
       "title": "Open SSE streams",
       "description": "Run event and metric streams per replica; a replica whose event hub isn't LISTENing falls back to the safety poll.",
       "datasource": {
@@ -4120,7 +4240,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 165
+        "y": 173
       },
       "targets": [
         {
@@ -4175,7 +4295,7 @@
     },
     {
       "type": "timeseries",
-      "id": 75,
+      "id": 77,
       "title": "Event hub fetches and notifications/s",
       "description": "",
       "datasource": {
@@ -4186,7 +4306,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 173
+        "y": 181
       },
       "targets": [
         {
@@ -4241,7 +4361,7 @@
     },
     {
       "type": "timeseries",
-      "id": 76,
+      "id": 78,
       "title": "Event dispatch latency (p50, p95)",
       "description": "",
       "datasource": {
@@ -4252,7 +4372,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 173
+        "y": 181
       },
       "targets": [
         {
@@ -4307,20 +4427,20 @@
     },
     {
       "type": "row",
-      "id": 77,
+      "id": 79,
       "title": "Dependencies (Postgres, S3)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 181
+        "y": 189
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 78,
+      "id": 80,
       "title": "Postgres pool",
       "description": "Connections per state; waiting > 0 means requests queue for a connection.",
       "datasource": {
@@ -4331,7 +4451,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4375,7 +4495,7 @@
     },
     {
       "type": "timeseries",
-      "id": 79,
+      "id": 81,
       "title": "Postgres queries (p95) and errors/s",
       "description": "",
       "datasource": {
@@ -4386,7 +4506,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4441,7 +4561,7 @@
     },
     {
       "type": "timeseries",
-      "id": 80,
+      "id": 82,
       "title": "Object storage p95 by op",
       "description": "",
       "datasource": {
@@ -4452,7 +4572,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4496,7 +4616,7 @@
     },
     {
       "type": "timeseries",
-      "id": 81,
+      "id": 83,
       "title": "Object storage errors/s by op",
       "description": "",
       "datasource": {
@@ -4507,7 +4627,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 190
+        "y": 198
       },
       "targets": [
         {
@@ -4551,7 +4671,7 @@
     },
     {
       "type": "timeseries",
-      "id": 82,
+      "id": 84,
       "title": "Maintenance step errors and p95",
       "description": "",
       "datasource": {
@@ -4562,7 +4682,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 190
+        "y": 198
       },
       "targets": [
         {
@@ -4617,7 +4737,7 @@
     },
     {
       "type": "timeseries",
-      "id": 83,
+      "id": 85,
       "title": "grad-server memory",
       "description": "Resident memory per API replica.",
       "datasource": {
@@ -4628,7 +4748,7 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 190
+        "y": 198
       },
       "targets": [
         {
@@ -4672,7 +4792,7 @@
     },
     {
       "type": "timeseries",
-      "id": 84,
+      "id": 86,
       "title": "Event loop lag (p99)",
       "description": "",
       "datasource": {
@@ -4683,7 +4803,7 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 190
+        "y": 198
       },
       "targets": [
         {
@@ -4727,20 +4847,20 @@
     },
     {
       "type": "row",
-      "id": 85,
+      "id": 87,
       "title": "Logs",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 198
+        "y": 206
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 86,
+      "id": 88,
       "title": "Log lines by level",
       "description": "Needs a Loki data source with the grad pods' logs (labels namespace and container).",
       "datasource": {
@@ -4751,7 +4871,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 199
+        "y": 207
       },
       "targets": [
         {
@@ -4794,7 +4914,7 @@
     },
     {
       "type": "logs",
-      "id": 87,
+      "id": 89,
       "title": "Errors and warnings",
       "description": "JSON lines with level warn or error; each carries request_id, job_id, workspace_id and trace_id where they apply, and errors their stack.",
       "datasource": {
@@ -4805,7 +4925,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 205
+        "y": 213
       },
       "targets": [
         {
@@ -4832,7 +4952,7 @@
     },
     {
       "type": "logs",
-      "id": 88,
+      "id": 90,
       "title": "All grad logs",
       "description": "",
       "datasource": {
@@ -4843,7 +4963,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 215
+        "y": 223
       },
       "targets": [
         {

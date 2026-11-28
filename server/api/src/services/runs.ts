@@ -19,6 +19,7 @@ import {
   type RunCounts,
   type RunEvent,
   type RunEventsPage,
+  type RunPhase,
   type RunStatus,
   type TrainerJob,
   type UploadTicket,
@@ -446,6 +447,21 @@ export const createRunLifecycle = (
   const publicRun = async (run: RunRecord): Promise<Run> =>
     toPublicRun(run, await computeFor(run));
 
+  /**
+   * Observes how long the run's current attempt spent in its latest phase,
+   * as it moves on to `next` (null: the attempt ends). A repeated report of
+   * the same phase observes nothing.
+   */
+  const observePhaseEnd = (run: RunRecord, next: RunPhase | null): void => {
+    const ended = run.phase_event;
+    const phase = ended?.payload.phase;
+    if (!ended || ended.attempt !== run.attempt || phase === next) return;
+    if (typeof phase !== "string") return;
+    const seconds =
+      (clock.now().getTime() - Date.parse(ended.created_at)) / 1000;
+    metrics.runPhaseDuration.observe({ phase }, Math.max(0, seconds));
+  };
+
   /** The step the next attempt resumes from (its newest checkpoint), or null. */
   const resumeStepOf = async (runId: string) =>
     (await store.artifacts.allCheckpoints(runId, clock.now())).at(-1)?.step ??
@@ -716,6 +732,7 @@ export const createRunLifecycle = (
       }
       // Keyed per attempt: a claim retried after a lost response adds nothing.
       const resumeStep = job.resume?.step ?? null;
+      if (!renewed) observePhaseEnd(run, "starting");
       await appendAttempt(store.jobs, {
         jobId: run.id,
         attempt: run.attempt,
@@ -1256,6 +1273,7 @@ export const createRunLifecycle = (
         }
         throw leaseLost(id);
       }
+      observePhaseEnd(run, null);
 
       const wantsArtifact =
         run.status !== "cancelled" &&
@@ -1395,6 +1413,7 @@ export const createRunLifecycle = (
     reportEvent: async (principal, id, body) => {
       const run = await loadLeasedRun(principal, id, body);
       if (body.type === "phase") {
+        observePhaseEnd(run, body.phase);
         await appendPhase(store.jobs, {
           jobId: run.id,
           attempt: run.attempt,

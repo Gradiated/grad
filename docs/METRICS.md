@@ -43,6 +43,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_maintenance_step_errors_total` | counter | `step` | Maintenance steps that failed. |
 | `grad_price_list_age_seconds` | gauge |  | Cloud: seconds since the price list was last confirmed (new work is refused past 24 h). |
 | `grad_queue_limit_rejections_total` | counter | `kind` | Creates refused with 429 queue_limit (GRAD_MAX_QUEUED_PER_WORKSPACE), by the kind of job refused. |
+| `grad_run_phase_duration_seconds` | histogram | `phase` | How long a run attempt spent in each phase: queued and waiting_for_compute (waiting for a worker), starting (claim to the worker's first report), loading_model (data, weights and tokenization: claim to the first step), training, evaluating, checkpointing, uploading and completing. Observed when the phase ends. |
 | `grad_source_consecutive_failures` | gauge | `provider` | The most consecutive failed syncs of any source, by provider. |
 | `grad_source_records_synced_total` | counter | `provider` | Records source syncs added, by provider. |
 | `grad_source_score_updates_total` | counter | `provider` | Score updates source syncs added, by provider. |

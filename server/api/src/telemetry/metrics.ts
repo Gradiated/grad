@@ -79,6 +79,8 @@ const BUCKETS = {
   queue: [1, 5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400],
   /** Whole jobs. */
   job: [10, 30, 60, 300, 600, 1800, 3600, 7200, 14400, 28800, 86400, 172800],
+  /** Run phases: seconds of setup up to hours of training. */
+  phase: [0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1800, 3600, 14400],
   /** Checkpoint uploads. */
   upload: [0.5, 1, 5, 15, 30, 60, 120, 300, 600, 1800],
 };
@@ -170,6 +172,12 @@ export const metrics = {
     "Time from creating a job to its first claim.",
     ["kind"],
     BUCKETS.queue,
+  ),
+  runPhaseDuration: histogram(
+    "grad_run_phase_duration_seconds",
+    "How long a run attempt spent in each phase: queued and waiting_for_compute (waiting for a worker), starting (claim to the worker's first report), loading_model (data, weights and tokenization: claim to the first step), training, evaluating, checkpointing, uploading and completing. Observed when the phase ends.",
+    ["phase"],
+    BUCKETS.phase,
   ),
   jobDuration: histogram(
     "grad_job_duration_seconds",
