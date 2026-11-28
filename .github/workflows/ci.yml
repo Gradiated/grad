@@ -378,6 +378,7 @@ jobs:
           docker compose -f server/docker-compose.yml config --quiet
           docker compose -f server/docker-compose.yml -f tests/compose/smoke.yml config --quiet
           docker compose -f server/docker-compose.yml -f tests/compose/smoke.yml -f cli/assets/dev-models.yml --profile dev-models config --quiet
+          python3 tests/compose/same-stack.py
 
       - name: Lint, template and kubeconform the Helm chart (default, kind, air-gapped/KEDA, monitoring, Cloud)
         run: |
