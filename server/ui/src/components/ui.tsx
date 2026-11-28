@@ -239,7 +239,7 @@ export const CopyButton = ({ text, label = "Copy" }: { text: string; label?: str
 
 export const Command = ({ cmd }: { cmd: string }) => (
   <div className="cmd">
-    <code>{cmd}</code>
+    <code tabIndex={0}>{cmd}</code>
     <CopyButton text={cmd} label="Copy command" />
   </div>
 );
