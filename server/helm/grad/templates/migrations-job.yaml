@@ -1,4 +1,5 @@
 {{- if .Values.migrations.enabled }}
+{{- $ca := include "grad.postgresCa" . }}
 # Runs before the API rolls out on every install and upgrade (Argo CD maps the
 # hook to PreSync). It needs only database-url; the API replicas start with
 # MIGRATE_ON_BOOT=false and refuse to serve an unmigrated database.
@@ -32,8 +33,21 @@ spec:
           args: ["node", "dist/main.js", "migrate"]
           env:
             {{- include "grad.secretEnv" (list . "DATABASE_URL" "database-url" false) | nindent 12 }}
+            {{- if $ca }}
+            # verify-full against database.caBundle (server/api/src/store/postgres/tls.ts).
+            - {name: PGSSLROOTCERT, value: /etc/grad/postgres-ca/ca.pem}
+            {{- end }}
           securityContext:
             {{- include "grad.containerSecurity" . | nindent 12 }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
+          {{- if $ca }}
+          volumeMounts:
+            - {name: postgres-ca, mountPath: /etc/grad/postgres-ca, readOnly: true}
+      volumes:
+        - name: postgres-ca
+          configMap:
+            name: {{ $ca }}
+            items: [{key: {{ include "grad.postgresCaKey" . }}, path: ca.pem}]
+          {{- end }}
 {{- end }}

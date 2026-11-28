@@ -1,4 +1,5 @@
 {{- include "grad.validate" . -}}
+{{- $ca := include "grad.postgresCa" . -}}
 {{- /* Runs scale from zero only when KEDA scales a pool that takes train jobs. */ -}}
 {{- $autoscaling := false -}}
 {{- range $name, $w := omit .Values.workers "auth" -}}
@@ -112,6 +113,10 @@ spec:
             {{- end }}
             {{- include "grad.secretEnv" (list . "GRAD_CLOUD_AUTH_DATABASE_URL" "cloud-auth-database-url" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "DATABASE_URL" "database-url" false) | nindent 12 }}
+            {{- if $ca }}
+            # verify-full against database.caBundle (server/api/src/store/postgres/tls.ts).
+            - {name: PGSSLROOTCERT, value: /etc/grad/postgres-ca/ca.pem}
+            {{- end }}
             {{- include "grad.secretEnv" (list . "ADMIN_API_KEY_HASH" "admin-api-key-hash" true) | nindent 12 }}
             - {name: GRAD_WORKER_AUTH, value: {{ include "grad.workerAuth" . | quote }}}
             {{- if eq (include "grad.workerAuth" .) "kubernetes" }}
@@ -153,6 +158,15 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $ca }}
+            - {name: postgres-ca, mountPath: /etc/grad/postgres-ca, readOnly: true}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $ca }}
+        - name: postgres-ca
+          configMap:
+            name: {{ $ca }}
+            items: [{key: {{ include "grad.postgresCaKey" . }}, path: ca.pem}]
+        {{- end }}

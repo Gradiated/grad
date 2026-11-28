@@ -1,10 +1,14 @@
 # Test values for tests/helm/smoke.sh: locally built images, in-cluster
-# Postgres and SeaweedFS fixtures, the reference trainer backend, small requests.
+# Postgres (TLS only) and SeaweedFS fixtures, the reference trainer backend, small requests.
 # The chart creates its Secret (admin key, worker keys, secrets-key) itself.
 secrets:
   databaseUrl: postgres://grad:grad-kind-only@postgres:5432/grad
   awsAccessKeyId: gradkind
   awsSecretAccessKey: grad-kind-only-secret
+# The fixture Postgres serves a certificate from smoke.sh's throwaway CA.
+database:
+  caBundle:
+    configMap: {name: postgres-ca}
 api:
   replicaCount: 2
   image: {repository: grad-server, tag: dev, pullPolicy: Never}

@@ -15,7 +15,7 @@ all of it, used by the server tests and by `tests/harness/stack.ts --cloud`.
 | Setting | Needed for | What it is |
 | --- | --- | --- |
 | `AUTH_MODE=cloud` | auth | API keys from the product's auth view, console JWTs. `/v1/keys` is not used. |
-| `GRAD_CLOUD_AUTH_DATABASE_URL` | `AUTH_MODE=cloud` | Read-only Postgres URL of the product database (role `grad_auth_reader`, `SELECT` on `auth_principals_v1` only). |
+| `GRAD_CLOUD_AUTH_DATABASE_URL` | `AUTH_MODE=cloud` | Read-only Postgres URL of the product database (role `grad_auth_reader`, `SELECT` on `auth_principals_v1` only). With `PGSSLROOTCERT` (Helm `database.caBundle`) it is verified like `DATABASE_URL` ([Postgres TLS](SELF_HOSTING.md#postgres-tls)). |
 | `GRAD_CLOUD_JWKS_URL` | `AUTH_MODE=cloud` | The control plane's JWKS, e.g. `https://api.gradiated.com/api/auth/jwks`. |
 | `GRAD_CLOUD_JWT_ISSUER` | `AUTH_MODE=cloud` | The tokens' `iss`, e.g. `https://api.gradiated.com`. |
 | `BILLING_MODE=cloud` | billing | Balance checks, usage push, the price list. |

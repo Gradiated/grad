@@ -1,0 +1,19 @@
+{{- with (.Values.database | default dict).caBundle }}
+{{- if .pem }}
+# The Postgres CA bundle from database.caBundle.pem. A hook like the Secret, so
+# it exists before the migrations Job; `helm uninstall` leaves it (public data).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "grad.postgresCa" $ }}
+  labels:
+    {{- include "grad.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  ca.pem: |
+    {{- .pem | nindent 4 }}
+{{- end }}
+{{- end }}

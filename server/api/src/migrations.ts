@@ -1,6 +1,7 @@
 import pg from "pg";
 
 import { migrate, pendingMigrations } from "./store/migrate.js";
+import { postgresConnection } from "./store/postgres/tls.js";
 
 interface MigrationOptions {
   schema?: string | undefined;
@@ -11,7 +12,10 @@ const withPool = async <T>(
   connectionString: string,
   fn: (pool: pg.Pool) => Promise<T>,
 ): Promise<T> => {
-  const pool = new pg.Pool({ connectionString, max: 1 });
+  const pool = new pg.Pool({
+    ...postgresConnection(connectionString),
+    max: 1,
+  });
   try {
     return await fn(pool);
   } finally {

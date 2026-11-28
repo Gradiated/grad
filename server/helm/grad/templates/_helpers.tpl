@@ -118,10 +118,20 @@ capabilities:
 {{- fail "secrets.existingSecret is required with secrets.create=false: a Secret with at least a database-url key." -}}
 {{- end -}}
 {{- /* Keys from older docs and chart versions: refuse them instead of ignoring them. */ -}}
-{{- $moved := dict "secret" "secrets.existingSecret (with secrets.create=false)" "database" "secrets.databaseUrl, or secrets.existingSecret" "auth" "secrets.adminApiKeyHash, or secrets.existingSecret" "trainer" "workers.train (gpuCount, nodeSelector, tolerations) and workerDefaults.image" "judge" "evals.judgeBaseUrl" -}}
+{{- $moved := dict "secret" "secrets.existingSecret (with secrets.create=false)" "auth" "secrets.adminApiKeyHash, or secrets.existingSecret" "trainer" "workers.train (gpuCount, nodeSelector, tolerations) and workerDefaults.image" "judge" "evals.judgeBaseUrl" -}}
 {{- range $key, $instead := $moved -}}
 {{- if hasKey $.Values $key -}}
 {{- fail (printf "values key '%s' is not part of this chart; use %s." $key $instead) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $_ := .Values.database -}}
+{{- if ne $key "caBundle" -}}
+{{- fail (printf "values key 'database.%s' is not part of this chart (database holds only caBundle); the URL goes in secrets.databaseUrl, or secrets.existingSecret." $key) -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.database.caBundle -}}
+{{- if and .pem .configMap.name -}}
+{{- fail "database.caBundle: set configMap.name or pem, not both." -}}
 {{- end -}}
 {{- end -}}
 {{- if not (has (include "grad.workerAuth" .) (list "kubernetes" "static")) -}}
@@ -183,4 +193,24 @@ max(sum by (pod) (grad_jobs_open{ {{- include "grad.metricsSelector" $ctx }}, ki
 {{- define "grad.queueDepthUrl" -}}
 {{- $ctx := index . 0 -}}
 http://{{ include "grad.fullname" $ctx }}-api.{{ $ctx.Release.Namespace }}.svc:{{ $ctx.Values.metrics.port }}/metrics/queue?kinds={{ join "," (index . 1) }}
+{{- end -}}
+
+{{/* The ConfigMap holding the Postgres CA bundle (database.caBundle), or "". */}}
+{{- define "grad.postgresCa" -}}
+{{- with .Values.database.caBundle -}}
+{{- if .pem -}}
+{{- printf "%s-postgres-ca" (include "grad.fullname" $) -}}
+{{- else -}}
+{{- .configMap.name -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The ConfigMap key holding the bundle. */}}
+{{- define "grad.postgresCaKey" -}}
+{{- if .Values.database.caBundle.pem -}}
+ca.pem
+{{- else -}}
+{{- .Values.database.caBundle.configMap.key | default "ca.pem" -}}
+{{- end -}}
 {{- end -}}

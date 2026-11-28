@@ -1,5 +1,7 @@
 import pg from "pg";
 
+import { postgresConnection } from "../store/postgres/tls.js";
+
 /** One usable principal from the product's `auth_principals_v1` view. */
 export interface AuthViewRow {
   api_key_id: string;
@@ -31,7 +33,7 @@ export interface AuthView {
  */
 export const createAuthView = (connectionString: string): AuthView => {
   const pool = new pg.Pool({
-    connectionString,
+    ...postgresConnection(connectionString),
     max: 4,
     connectionTimeoutMillis: 2_000,
     idleTimeoutMillis: 30_000,

@@ -116,6 +116,7 @@ To work on it, run the API (for example `grad local up` or the harness) and `pnp
 | `GRAD_ORCHESTRATOR_KEYS_JSON` | none | `lease` mode: who may mint lease tokens, `[{"label": "gpu-fleet", "sha256": "<hex>", "kinds": ["train"]}]`. Accepted only on `INTERNAL_PORT`. |
 | `INTERNAL_PORT` | off | Serve the internal routes on this port only, never on `PORT`. Each group is mounted only when configured (otherwise 404): lease-token minting and revocation (`lease` in `GRAD_WORKER_AUTH` plus `GRAD_ORCHESTRATOR_KEYS_JSON`) and Gradiated Cloud's routes (`AUTH_MODE=cloud`, [CLOUD_MODE.md](CLOUD_MODE.md#the-internal-listener)). Refused at startup when neither is configured. Helm: `api.internalPort`. |
 | `DATABASE_URL` | required | PostgreSQL 17 connection string (on AWS, Amazon RDS or Aurora for PostgreSQL 17). Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once; they run on their own connection with no statement timeout, so a long one, or a replica waiting for another's, never fails the boot. Requests wait at most 5 s for a connection, a statement at most 30 s (35 s on the client, which also covers a failover that left a dead connection without a reset), and the API answers 503 `database_unavailable` with `Retry-After: 1` meanwhile. |
+| `PGSSLROOTCERT` | none | A PEM CA bundle: every Postgres connection then verifies the server certificate and hostname against it (`verify-full`), whatever `ssl*` parameters the URL carries. See [Postgres TLS](#postgres-tls). |
 | `MIGRATE_ON_BOOT` | `true` | `false` skips them and refuses to start while any is pending; run `node dist/main.js migrate` first (the Helm chart's migrations Job does). |
 | `S3_BUCKET` | required | The bucket for datasets, checkpoints and artifacts. Workers and SDKs upload and download through presigned URLs. Objects are written once under unique keys and never overwritten. Credentials come from the AWS SDK's default chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, EKS Pod Identity, IRSA, an instance role). |
 | `S3_REGION`, `S3_ENDPOINT` | AWS default, AWS S3 | `S3_ENDPOINT` points at another S3-compatible store (SeaweedFS, MinIO, R2); path-style addressing is used then. |
@@ -189,6 +190,23 @@ The token is returned once; grad-server stores only its SHA-256 (`grad_worker_to
 - The GPU memory the claim reports is no more than `gpu_memory_gb` (`403 gpu_memory_exceeds_token`). Claims are filtered as if the worker had at most that much, including a claim that reports no GPU.
 
 Lease tokens are looked up on every request (they are never cached), so revocation takes effect at once. Revoke after the worker has drained. A revoked token's next request gets a 401 and the worker stops (an eval worker leaves the eval to its lease, never fails it); any lease it still held expires and its job is requeued, which counts toward `MAX_ATTEMPTS`. Draining first (SIGTERM the worker) hands the job back as a preemption instead. The maintenance tick deletes expired tokens.
+
+### Postgres TLS
+
+Set `PGSSLROOTCERT` to a PEM CA bundle and every Postgres connection (`DATABASE_URL`, the `migrate` command, and `GRAD_CLOUD_AUTH_DATABASE_URL` in Cloud mode) verifies the server like libpq's `sslmode=verify-full`: the certificate must chain to the bundle and name the URL's host (an IP address host must be among the certificate's IP addresses). The bundle replaces any `ssl*` parameters in the URL, including a stale `sslmode=no-verify`; a client certificate (`sslcert`, `sslkey`) still applies. With a bundle the connection string must be a `postgres://` URL.
+
+Without `PGSSLROOTCERT`, the URL decides, as node-postgres reads it: `sslmode=verify-full&sslrootcert=/path/ca.pem` verifies too; `sslmode=require` (or `verify-full` without `sslrootcert`) verifies against Node's built-in public CAs, which do not include the RDS CAs; `sslmode=no-verify` encrypts without checking the certificate. Only grad-server connects to Postgres: workers and the Python trainer never do.
+
+Amazon RDS and Aurora certificates chain to the public [RDS global bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem) (every region's root CAs, about 170 KB). Use the instance or cluster endpoint (`<name>.<id>.<region>.rds.amazonaws.com`) as the host: a CNAME of your own is not on the certificate. With the Helm chart, give the bundle as `database.caBundle`, a ConfigMap you create or the PEM itself:
+
+```bash
+curl -fsSLo global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+kubectl -n grad create configmap rds-ca --from-file=ca.pem=global-bundle.pem
+helm upgrade --install grad server/helm/grad --namespace grad \
+  --set database.caBundle.configMap.name=rds-ca   # or: --set-file database.caBundle.pem=global-bundle.pem
+```
+
+The chart mounts it read-only at `/etc/grad/postgres-ca/ca.pem` in the API pods and the migrations Job and sets `PGSSLROOTCERT`. `database.caBundle.configMap.key` names another key in your ConfigMap (default `ca.pem`). An inline `pem` becomes the ConfigMap `<release>-grad-postgres-ca`, created like the Secret before the migrations Job runs (so it also works where the Job is an Argo CD PreSync hook); a ConfigMap of your own must exist before the install or upgrade that names it. Set `sslmode=verify-full` in the URL as well, so that a missing bundle fails closed instead of skipping the check.
 
 ### Object storage
 
@@ -288,6 +306,7 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
 4. Optional:
    - `keda.enabled=true` (KEDA installed in the cluster) adds a ScaledObject per worker. It scales on the open jobs of that worker's kinds, queued **and running**, so a scale-down never strands a running job. `keda.workers.train.minReplicaCount=0` scales GPUs to zero. See [KEDA](#keda) for its two trigger modes; neither needs database credentials.
    - `networkPolicy.enabled=true` lets only this release's workers and `networkPolicy.apiIngressFrom` peers reach the API (and only `networkPolicy.internalIngressFrom` peers reach `api.internalPort`), and limits worker egress to DNS, the API and `networkPolicy.workerEgress` (default: HTTPS to public addresses only, never private ranges, CGNAT or link-local metadata endpoints). Add your S3 endpoint there if it is private, and an in-cluster inference or judge endpoint to `networkPolicy.inferenceEgress`.
+   - `database.caBundle` (a ConfigMap or inline PEM) makes the API and the migrations Job verify Postgres's certificate and hostname (`verify-full`); for RDS, the AWS global bundle. See [Postgres TLS](#postgres-tls).
    - `ingress.enabled=true` exposes the API and the [web UI](#web-ui), which share the `/` path on the API Service; `ui.enabled=false` serves only the API.
 5. Serve trained artifacts on vLLM or SGLang by downloading the verified `.grad.tar.gz` bundle:
    ```bash
@@ -297,7 +316,7 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
    ```
    `--output` extracts a PEFT directory (`adapter_config.json`, `adapter_model.safetensors`) after checking the bundle's SHA-256 and every file against its manifest.
 
-`tests/helm/smoke.sh` installs the chart on a kind cluster with throwaway Postgres and SeaweedFS (`server/helm/grad/ci/kind-values.yaml`) and checks a run end to end, including API pods being killed mid-run, an upgrade and an uninstall. It also checks worker authentication by service account: each pool's token claims only its own kinds, a token for another audience or an unmapped account is refused, grad-server may only create TokenReviews, and the train pool runs under the training PriorityClass. CI runs it on every push.
+`tests/helm/smoke.sh` installs the chart on a kind cluster with throwaway Postgres (TLS only, with a certificate from a throwaway CA given as `database.caBundle`) and SeaweedFS (`server/helm/grad/ci/kind-values.yaml`) and checks a run end to end, including API pods being killed mid-run, an upgrade and an uninstall. The migrate command must fail there without the bundle and under a hostname the certificate lacks. It also checks worker authentication by service account: each pool's token claims only its own kinds, a token for another audience or an unmapped account is refused, grad-server may only create TokenReviews, and the train pool runs under the training PriorityClass. CI runs it on every push.
 
 ## Monitoring
 

@@ -15,6 +15,7 @@ import { createTelemetryRepository } from "./telemetry.js";
 import { createUsageRepository } from "./usage.js";
 import { createWorkspaceRepository } from "./workspaces.js";
 import { createWorkerTokenRepository } from "./worker-tokens.js";
+import { postgresConnection } from "./tls.js";
 import { watchPool } from "../../telemetry/metrics.js";
 
 export interface PostgresStoreOptions {
@@ -62,8 +63,9 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
   if (options.schema !== undefined && !SCHEMA_RE.test(options.schema)) {
     throw new Error(`Invalid schema name '${options.schema}'.`);
   }
+  const connection = postgresConnection(options.connectionString);
   const pool = new Pool({
-    connectionString: options.connectionString,
+    ...connection,
     ...POOL_TIMEOUTS,
     query_timeout: options.queryTimeoutMs ?? QUERY_TIMEOUT_MS,
     options: [
@@ -109,7 +111,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
       // Its own connection: the serving pool's client-side query timeout
       // would cut a long migration off.
       const migrator = new Pool({
-        connectionString: options.connectionString,
+        ...connection,
         max: 1,
       });
       migrator.on("error", logLost);
@@ -149,7 +151,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
       }
       const pingMs = options.listenPingMs ?? LISTEN_PING_MS;
       const client = new Client({
-        connectionString: options.connectionString,
+        ...connection,
         ...POOL_TIMEOUTS,
         query_timeout: pingMs,
       });

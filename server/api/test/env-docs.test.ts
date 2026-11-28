@@ -66,9 +66,11 @@ const documentedDefaults = (names: string[], cell: string) => {
   return parts.map((p) => /^`([^`]*)`$/.exec(p.trim())?.[1]);
 };
 
-// Read outside the schemas (the OpenTelemetry SDK, the worker's token source).
+// Read outside the schemas (the OpenTelemetry SDK, the worker's token source,
+// every Postgres connection).
 const READ_ELSEWHERE = new Set([
   "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "PGSSLROOTCERT",
   "GRAD_WORKER_TOKEN",
   "GRAD_WORKER_TOKEN_FILE",
 ]);

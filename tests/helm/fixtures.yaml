@@ -1,7 +1,17 @@
 # Test-only fixtures for tests/helm/smoke.sh: a throwaway Postgres and SeaweedFS.
+# Postgres takes TLS connections only, with the certificate smoke.sh issues
+# (Secret postgres-tls) for the Service name `postgres`.
 apiVersion: v1
 kind: Service
 metadata: {name: postgres}
+spec:
+  selector: {app: postgres}
+  ports: [{port: 5432}]
+---
+# The same Postgres under a name its certificate lacks (verify-full must refuse it).
+apiVersion: v1
+kind: Service
+metadata: {name: postgres-alias}
 spec:
   selector: {app: postgres}
   ports: [{port: 5432}]
@@ -17,6 +27,17 @@ spec:
       containers:
         - name: postgres
           image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+          # The key must belong to postgres with mode 0600; TCP clients need TLS (hostssl).
+          command: [sh, -c]
+          args:
+            - >-
+              mkdir -p /tls && cp /tls-src/tls.crt /tls/server.crt && cp /tls-src/tls.key /tls/server.key &&
+              printf 'local all all trust\nhostssl all all all scram-sha-256\n' > /tls/pg_hba.conf &&
+              chown -R postgres /tls && chmod 600 /tls/server.key &&
+              exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tls/server.crt
+              -c ssl_key_file=/tls/server.key -c hba_file=/tls/pg_hba.conf
+          volumeMounts:
+            - {name: tls, mountPath: /tls-src, readOnly: true}
           env:
             - {name: POSTGRES_USER, value: grad}
             - {name: POSTGRES_PASSWORD, value: grad-kind-only}
@@ -27,6 +48,8 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {memory: 256Mi}
+      volumes:
+        - {name: tls, secret: {secretName: postgres-tls}}
 ---
 # SeaweedFS (single-node S3, as `grad local up` runs it), with the bucket
 # created at startup and the test key from the Secret below.

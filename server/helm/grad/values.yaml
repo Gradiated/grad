@@ -46,6 +46,26 @@ secrets:
   awsAccessKeyId: ""
   awsSecretAccessKey: ""
 
+# Postgres TLS. With a CA bundle, grad-server and the migrations Job verify the
+# database's certificate chain and hostname (sslmode=verify-full) against it on
+# database-url and cloud-auth-database-url, whatever ssl settings the URLs name:
+# the bundle is mounted read-only at /etc/grad/postgres-ca/ca.pem and
+# PGSSLROOTCERT points at it. The URL's host must be a name the certificate
+# carries (for RDS, the instance or cluster endpoint, not a CNAME of your own).
+# Amazon RDS and Aurora: the public bundle
+# https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem, e.g.
+#   kubectl create configmap rds-ca --from-file=ca.pem=global-bundle.pem
+# with configMap.name: rds-ca. Workers never connect to Postgres.
+database:
+  caBundle:
+    # An existing ConfigMap holding the PEM bundle...
+    configMap:
+      name: ""
+      key: ca.pem
+    # ...or the PEM itself (--set-file database.caBundle.pem=global-bundle.pem);
+    # the chart puts it in the ConfigMap <release>-grad-postgres-ca.
+    pem: ""
+
 api:
   replicaCount: 2
   image:
