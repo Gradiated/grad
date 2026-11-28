@@ -66,6 +66,16 @@ tokens/s, GPU utilisation and memory, checkpoint and upload times) on that port.
 heartbeat also carries the phase, tokens/s and GPU numbers, which grad-server aggregates into
 its `grad_worker_*` gauges, so pools that can't be scraped still show up.
 
+## Dev inference (`grad-dev-inference`)
+
+`grad local up --dev-models` runs the image's `grad-dev-inference` command (`grad_trainer/dev_inference.py`):
+a stdlib HTTP server with an OpenAI-compatible `POST /v1/chat/completions` for the local stack's evals. It
+serves the dev models by catalog id, `peft_lora`/`merged_safetensors` artifacts trained on them by artifact
+id (downloaded from `GRAD_SERVER_URL` with `GRADIATED_API_KEY`, checked against `X-Grad-Workspace`), and the
+deterministic `test/tiny-judge`. CPU only, one completion at a time, models loaded on first use. Settings:
+`GRAD_DEV_INFERENCE_HOST`/`_PORT` (`127.0.0.1`/`8000`), `GRAD_DEV_INFERENCE_CACHE` (loaded models, 4),
+`GRAD_DEV_INFERENCE_MAX_TOKENS` (64). See docs/SELF_HOSTING.md, "Local development".
+
 ## Models
 
 Catalog ids map to Hugging Face repos (`qwen/qwen3-8b` -> `Qwen/Qwen3-8B`, ...). Override with

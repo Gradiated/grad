@@ -9,6 +9,8 @@ network, a few seconds on a CPU) under ``$GRAD_DEV_MODELS_DIR`` (default
 - ``test/tiny-qwen3`` and ``test/tiny-qwen3-teacher``: 2-layer Qwen3 causal LMs with a
   byte-level BPE tokenizer that has the Qwen3 special tokens and the upstream chat template.
 - ``test/tiny-bert``: a 2-layer BERT encoder with a WordPiece tokenizer.
+
+``grad_trainer.dev_inference`` serves the Qwen3 ones (and artifacts trained on them) to evals.
 """
 
 from __future__ import annotations

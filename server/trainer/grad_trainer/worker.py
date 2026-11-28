@@ -297,6 +297,10 @@ class ProtocolClient:
                 self.sleep(next(delays))
         raise AssertionError("unreachable")  # pragma: no cover
 
+    def get_json(self, path: str) -> dict[str, Any]:
+        with self._open("GET", path, headers={"Accept": "application/json"}) as resp:
+            return json.loads(resp.read())
+
     def download(self, url: str, dest: Path, *, attempts: int = 3) -> None:
         delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
         for attempt in range(1, attempts + 1):

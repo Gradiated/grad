@@ -32,6 +32,7 @@ dev = ["coverage==7.17.4"]
 
 [project.scripts]
 grad-trainer = "grad_trainer.worker:main"
+grad-dev-inference = "grad_trainer.dev_inference:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
