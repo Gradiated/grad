@@ -129,10 +129,6 @@ class OnPolicyDistillTask(TorchTask):
         self.answers = {"tokens": 0, "count": 0, "truncated": 0}
 
     # -- encoding -----------------------------------------------------------------------------
-    def _ids(self, messages: list[dict[str, Any]], rid: str) -> list[int]:
-        rendered = self.render(messages, rid, add_generation_prompt=True, enable_thinking=self.spec.thinking != "off")
-        return list(self.tokenize(rendered, None).input_ids)
-
     def _teacher_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if self.context is None:
             return messages
@@ -150,8 +146,8 @@ class OnPolicyDistillTask(TorchTask):
                 self.skipped += 1
                 continue
             rid = record_id(rec, index)
-            student = self._ids(messages, rid)
-            teacher = self._ids(self._teacher_messages(messages), rid)
+            student = self.generation_ids(messages, rid)
+            teacher = self.generation_ids(self._teacher_messages(messages), rid)
             if len(teacher) > budget or len(student) > budget:
                 raise RecipeDataError(
                     f"Record '{rid}' leaves no room for a {self.max_new_tokens}-token answer within {self.max_len} "

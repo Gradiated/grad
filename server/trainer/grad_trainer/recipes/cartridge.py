@@ -129,9 +129,6 @@ class CartridgeTask(TorchTask):
             return messages
         return [{"role": "system", "content": prefix + self.separator + original}] + rest
 
-    def _ids(self, messages: list[dict[str, Any]], rid: str) -> list[int]:
-        rendered = self.render(messages, rid, add_generation_prompt=True, enable_thinking=self.spec.thinking != "off")
-        return list(self.tokenize(rendered, None).input_ids)
 
     def _prompts(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
@@ -141,7 +138,7 @@ class CartridgeTask(TorchTask):
                 self.skipped += 1
                 continue
             rid = record_id(rec, index)
-            student = self._ids(self._system(messages, self.slot_token * self.num_tokens), rid)
+            student = self.generation_ids(self._system(messages, self.slot_token * self.num_tokens), rid)
             slots = [i for i, t in enumerate(student) if t == self.slot_id]
             if len(slots) != self.num_tokens:
                 raise RecipeDataError(f"Record '{rid}' already contains the cartridge slot token.")
@@ -149,8 +146,8 @@ class CartridgeTask(TorchTask):
                 {
                     "student": student,
                     "slots": slots,
-                    "teacher": self._ids(self._system(messages, self.context), rid),
-                    "plain": self._ids(messages, rid),
+                    "teacher": self.generation_ids(self._system(messages, self.context), rid),
+                    "plain": self.generation_ids(messages, rid),
                 }
             )
         return out

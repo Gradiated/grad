@@ -95,6 +95,12 @@ class TorchTask:
         # Keep the end of long prompts: the generation header carries the pooled state.
         return ids[-max_len:].copy() if len(ids) > max_len else ids
 
+    def generation_ids(self, messages: Sequence[dict[str, Any]], record_id: str) -> list[int]:
+        """``messages`` and the assistant generation header, thinking as the run's ``thinking``
+        (what a teacher or the student generates from)."""
+        rendered = self.render(messages, record_id, add_generation_prompt=True, enable_thinking=self.spec.thinking != "off")
+        return self.tokenize(rendered, None).input_ids.tolist()
+
     # -- loop protocol ----------------------------------------------------------------------
     def accumulate(self, indices: list[int]) -> dict[str, float]:  # pragma: no cover - abstract
         raise NotImplementedError
