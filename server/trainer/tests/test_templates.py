@@ -7,7 +7,7 @@ import unittest
 from helpers import TorchCase
 
 from grad_trainer.errors import RecipeConfigError, RecipeDataError
-from grad_trainer.templates import message_text, render_chat, template_revision_for_model, tokenize_rendered
+from grad_trainer.templates import message_text, render_chat, tokenize_rendered
 
 MULTI_TURN = [
     {"role": "system", "content": "Be brief."},
@@ -105,8 +105,6 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(message_text([{"type": "text", "text": "a"}, "b", 3]), "ab")
         self.assertEqual(message_text(None), "")
         self.assertEqual(message_text(5), "5")
-        self.assertEqual(template_revision_for_model("Qwen/Qwen3-8B"), "qwen3@3")
-        self.assertEqual(template_revision_for_model("gradiated/linden-1"), "systemone@1")
 
 
 PARITY_CASES = [

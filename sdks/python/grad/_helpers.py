@@ -600,9 +600,6 @@ def safe_extract_bundle(bundle: Path, dest: Path, *, max_members: int = MAX_BUND
     return dict(manifest)
 
 
-PEFT_FORMATS = ("peft_lora", "merged_safetensors")
-
-
 def check_peft_dir(directory: Path, artifact_format: str | None) -> None:
     """Make sure an extracted directory is loadable as PEFT (or merged) weights."""
     has_adapter = (directory / "adapter_config.json").is_file() and any(directory.glob("adapter_model.*"))

@@ -26,16 +26,6 @@ from typing import Any, Sequence
 
 from .errors import RecipeConfigError, RecipeDataError
 
-TEMPLATE_REVISIONS: dict[str, str] = {
-    "qwen/qwen3-0.6b": "qwen3@3",
-    "qwen/qwen3-1.7b": "qwen3@3",
-    "qwen/qwen3-4b": "qwen3@3",
-    "qwen/qwen3-8b": "qwen3@3",
-    "qwen/qwen3-14b": "qwen3@3",
-    "qwen/qwen3-32b": "qwen3@3",
-    "gradiated/linden-1": "systemone@1",
-    "baai/bge-small-en-v1.5": "bge@1",
-}
 # systemone@1 (linden-1) uses ChatML framing identical to qwen3@3 for the prompts it reads.
 CHATML_REVISIONS = ("qwen3@3", "systemone@1")
 THINKING_MODES = ("auto", "on", "off")
@@ -70,10 +60,6 @@ class TokenizedExample:
     @property
     def num_trained(self) -> int:
         return sum(self.trained)
-
-
-def template_revision_for_model(model: str) -> str:
-    return TEMPLATE_REVISIONS.get(model.strip().lower(), "qwen3@3")
 
 
 def message_text(content: Any) -> str:

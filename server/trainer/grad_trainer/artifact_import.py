@@ -103,7 +103,6 @@ _PICKLES = (".bin", ".pt", ".pth", ".pkl", ".ckpt")
 #: Decoder layouts whose linear layers (and their shapes) follow from config.json.
 _DECODERS = ("qwen3", "qwen2", "llama", "mistral")
 _ATTENTION = ("q_proj", "k_proj", "v_proj", "o_proj")
-_MLP = ("gate_proj", "up_proj", "down_proj")
 _DTYPE_BYTES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1, "BOOL": 1}
 _LORA_TENSOR = re.compile(r"base_model\.model\.model\.layers\.(\d+)\.(self_attn|mlp)\.(\w+)\.lora_(A|B)(?:\.default)?\.weight")
 
