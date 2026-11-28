@@ -16,11 +16,25 @@ grad local up --observability
 grad local up --image-tag sha-abc1234
 # Build the images from a source checkout (uses server/docker-compose.yml):
 grad local up --build
-# Add tiny test models, to try training end to end on a laptop in seconds:
+# Add tiny test models, to try training and evals end to end on a laptop in seconds:
 grad local up --dev-models
 ```
 
 `--dev-models` registers `test/tiny-qwen3`, `test/tiny-qwen3-teacher` and `test/tiny-bert` in the catalog and sets `GRAD_DEV_MODELS=1` on the CPU trainer, which builds their randomly initialised weights on first use (a few seconds, no download) into its Hugging Face cache volume. Every recipe runs on them (`grad train --model test/tiny-qwen3 ...`), but they learn nothing useful: it is a try-it-out mode, and their artifacts carry `test_only: true` in the manifest.
+
+`--dev-models` also starts `grad-dev-inference` (the compose profile `dev-models`; the trainer image's `grad-dev-inference` command), a CPU OpenAI-compatible `/v1/chat/completions` endpoint, and points the API's and the eval worker's `GRAD_INFERENCE_BASE_URL` and `GRAD_JUDGE_BASE_URL` at it, so evals, `dataset.score()` with judges and distillation's teacher answers work with no extra flags. It serves the names the eval worker sends (see [Eval workers](#eval-workers)):
+
+- `test/tiny-qwen3` and `test/tiny-qwen3-teacher`, by catalog id;
+- `peft_lora` and `merged_safetensors` artifacts trained on them, by artifact id (`name@version`): it downloads each from grad-server with the `local` profile's key, checks its sha256 and that the artifact belongs to the call's `X-Grad-Workspace`, and loads it on first use (the four most recent stay loaded);
+- `test/tiny-judge`, a judge registered with `GRAD_JUDGE_MODELS_JSON`: it replies `{"score": x}`, where `x` is the word-overlap F1 of the judged response with the task's reference answer (1 for any non-empty response when there is none). It is deterministic and reads nothing else.
+
+Anything else (a catalog model such as `qwen/qwen3-8b`, a router or encoder artifact, a checkpoint id from recipe `evals=`) is refused with `404 model_not_found` or `400 model_not_supported`, which the eval records as that output's error. It generates one completion at a time (the eval worker runs `EVAL_CONCURRENCY=2` here), at most `GRAD_DEV_INFERENCE_MAX_TOKENS` (64) new tokens, and keeps a prompt's last tokens that fit the dev models' 512-token context; the outputs of random weights are noise, so the scores check the pipeline, not a model. It is not published on a host port. To eval against your own server instead, export `GRAD_INFERENCE_BASE_URL` (and `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_MODELS_JSON`) before `grad local up --dev-models`: what your shell sets wins.
+
+```bash
+printf -- '- name: overlap\n  kind: judge\n  model: test/tiny-judge\n' > rubric.yaml
+grad eval --name sft-vs-base --models support-sft@latest,test/tiny-qwen3 --dataset support-prod \
+  --rubric rubric.yaml --limit 20 --baseline test/tiny-qwen3 --wait
+```
 
 ### Images
 
@@ -45,13 +59,13 @@ export GRADIATED_PROFILE=local
 grad models list
 ```
 
-`grad local status` shows container status, API health and the API, web UI, Grafana and Prometheus URLs, `grad local logs [SERVICE] [--follow]` prints logs, `grad local down [--volumes]` stops the stack, and `grad local reset` deletes the local data and keys so the next `grad local up` starts fresh. Pass `--file` (or `GRAD_COMPOSE_FILE`) to use your own compose file; repeat `--file` (or separate the paths with `:`) to layer overrides on top, as `docker compose -f` does. `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` / `GRAD_TRAINER_GPU_IMAGE` override the images (then `grad local up` doesn't pull first), and `GRAD_POSTGRES_MEMORY` / `GRAD_S3_MEMORY` / `GRAD_SERVER_MEMORY` / `GRAD_TRAINER_MEMORY` (default `1g` / `512m` / `1g` / `8g`) cap the containers' memory. Data lives in named volumes (Postgres, the S3 store and the trainer's Hugging Face cache), so it survives `grad local down` and is deleted by `grad local down --volumes`.
+`grad local status` shows container status, API health and the API, web UI, Grafana and Prometheus URLs, `grad local logs [SERVICE] [--follow]` prints logs, `grad local down [--volumes]` stops the stack, and `grad local reset` deletes the local data and keys so the next `grad local up` starts fresh. Pass `--file` (or `GRAD_COMPOSE_FILE`) to use your own compose file; repeat `--file` (or separate the paths with `:`) to layer overrides on top, as `docker compose -f` does. `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` / `GRAD_TRAINER_GPU_IMAGE` override the images (then `grad local up` doesn't pull first), and `GRAD_POSTGRES_MEMORY` / `GRAD_S3_MEMORY` / `GRAD_SERVER_MEMORY` / `GRAD_TRAINER_MEMORY` / `GRAD_DEV_INFERENCE_MEMORY` (default `1g` / `512m` / `1g` / `8g` / `1g`) cap the containers' memory. Data lives in named volumes (Postgres, the S3 store and the trainer's Hugging Face cache), so it survives `grad local down` and is deleted by `grad local down --volumes`.
 
 The stack is set up like the Helm chart. The `migrate` service runs `node dist/main.js migrate` (the chart's migrations Job) and exits; `grad-server` waits for it and starts with `MIGRATE_ON_BOOT=false`. `grad-server` gets the same `S3_*` variables as on Kubernetes. The workers have no S3 credentials: they move bytes through presigned URLs, as in production. SeaweedFS's only S3 key is generated by the first `grad local up` and saved in the `local` profile with the other keys; the store refuses to start without it. Its S3 API is published on `127.0.0.1:18786` (`GRAD_S3_PORT`; probed and remembered like the API port), because `grad import` and the SDKs PUT files to presigned URLs from your machine. `grad-server` signs those upload tickets for that address (`S3_PUBLIC_ENDPOINT`), while the workers use `http://seaweedfs:8333` inside the compose network.
 
 The CPU trainer trains the dev models (`--dev-models`) and encoders in seconds to minutes. A base model sized for a GPU (`min_gpu_memory_gb` above 4, such as `qwen/qwen3-8b`) would download in full and crawl, so while only CPU workers are online, `runs.plan` and `grad train` warn and suggest `--gpu` or a dev model. The trainer also runs imports and source syncs. To sync from a provider on your own machine (a local Langfuse on port 3000, say), add the source with `--host http://host.docker.internal:3000` and allow the Docker bridge before starting the stack: `GRAD_SOURCES_EGRESS_ALLOW=172.16.0.0/12 grad local up` (the egress guard otherwise refuses private addresses). The provider must listen on more than loopback.
 
-`tests/compose/smoke.sh` boots the stack with `grad local up --build --dev-models` and runs the quickstarts (including the README's router on `examples/support_traces.jsonl`) through the CLI and the Python SDK; CI runs it on every push.
+`tests/compose/smoke.sh` boots the stack with `grad local up --build --dev-models`, runs the quickstarts (including the README's router on `examples/support_traces.jsonl`) through the CLI and the Python SDK, evals the trained artifact against the base model with a validator and `test/tiny-judge` on `grad-dev-inference`, and checks the report in the CLI, the Python SDK and (with `GRAD_SMOKE_UI=1`) the web console; CI runs it on every push.
 
 Running `server/docker-compose.yml` directly with `docker compose` defaults to `AUTH_MODE=none` for development; the server logs a warning on every start because every request is then a platform admin. To enable authentication there, set the bootstrap admin hash and a trainer key first:
 
@@ -217,7 +231,7 @@ An eval worker claims eval jobs over the same worker protocol as the trainer wor
 | `GRAD_SERVER_URL` | `http://127.0.0.1:8787` | The API. |
 | `TRAINER_API_KEY` | none | A worker key that may claim `eval` jobs (the platform key, or a `TRAINER_KEYS_JSON` key whose `kinds` include `eval`). Eval jobs carry no workspace secrets. |
 | `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY` | none | OpenAI-compatible endpoint for the models under eval (your vLLM/SGLang with LoRA modules named by artifact id). Every call carries `X-Grad-Workspace: <workspace id>`: artifact ids are unique only per workspace, so an endpoint shared by several workspaces must serve and bill by (workspace, model). Without it the worker still runs validators, regexes and code scorers, and says so at startup. |
-| `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items. `grad local up` passes all four from your shell. |
+| `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items. `grad local up` passes all four from your shell; with `--dev-models`, unset base URLs default to `grad-dev-inference` ([Local development](#local-development-grad-local-up)). |
 | `EVAL_CONCURRENCY` | `8` | Model calls in flight per worker. |
 | `GRAD_EVAL_CAPACITY_WAIT_SECONDS` | `720` | How long one model call waits in place for capacity (`503 capacity_unavailable`) or a rate limit (429 past the client's retries), honouring `Retry-After`, before the eval fails. The wait keeps the lease and spends no attempt; the eval shows `waiting_reason`. |
 | `GRAD_WORKER_ID` | hostname | Shown in leases and logs; a per-process suffix is appended. |

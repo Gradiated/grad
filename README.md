@@ -145,7 +145,7 @@ client.artifacts().download("support-router@latest", &DownloadOptions::extract("
 
 ### Try it on your laptop
 
-`grad local up` runs the same server in Docker. `--dev-models` adds tiny, randomly initialised test models (`test/tiny-qwen3`, `test/tiny-bert`) so a run finishes in seconds on a CPU; what they produce is for trying the workflow only.
+`grad local up` runs the same server in Docker. `--dev-models` adds tiny, randomly initialised test models (`test/tiny-qwen3`, `test/tiny-bert`) so a run finishes in seconds on a CPU, and a CPU inference endpoint that serves them, the adapters you train on them and a deterministic test judge (`test/tiny-judge`) to evals. What they produce is for trying the workflow (train, eval, compare) only.
 
 ```bash
 grad local up --dev-models
@@ -155,9 +155,15 @@ grad import ./support_traces.jsonl --dataset support-prod
 grad train --dataset support-prod --name support-router --recipe router --model test/tiny-qwen3 \
   --set rubric=resolved --max-cost-usd 1 --wait
 grad artifacts download support-router@latest --output ./support-router
+
+# Eval an SFT adapter against its base on the same traces, with a judge
+grad train --dataset support-prod --name support-sft --recipe sft --model test/tiny-qwen3 --max-cost-usd 1 --wait
+printf -- '- name: overlap\n  kind: judge\n  model: test/tiny-judge\n' > rubric.yaml
+grad eval --name sft-vs-base --models support-sft@latest,test/tiny-qwen3 --dataset support-prod \
+  --rubric rubric.yaml --limit 20 --baseline test/tiny-qwen3 --wait
 ```
 
-New to it? The [training overview](https://gradiated.com/docs/training/) walks the full loop, and the [router guide](https://gradiated.com/docs/training/recipes/router/) covers the data a router needs.
+`grad eval` prints the report when the eval finishes (`grad eval status EVAL_ID` shows it again); the SDKs have `ev.summary_table()` and the web UI an Evals page (`grad ui`). New to it? The [training overview](https://gradiated.com/docs/training/) walks the full loop, and the [router guide](https://gradiated.com/docs/training/recipes/router/) covers the data a router needs.
 
 ## What you can train
 
@@ -242,7 +248,7 @@ Self-hosted `grad` needs only PostgreSQL 17 and S3-compatible storage (AWS S3, S
 ```bash
 grad local up                 # Postgres, grad-server on 127.0.0.1:18787, a CPU trainer
 grad local up --gpu           # add the CUDA trainer (NVIDIA Container Toolkit)
-grad local up --dev-models    # add tiny test models that train in seconds (try-it-out only)
+grad local up --dev-models    # add tiny test models that train and eval in seconds (try-it-out only)
 export GRADIATED_PROFILE=local
 ```
 

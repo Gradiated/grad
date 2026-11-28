@@ -19,7 +19,7 @@
 3. **OpenAPI 3.1 Codegen (`scripts/generate-sdks.mjs`)**: Deterministic generator emitting zero-drift wire clients for TypeScript, Python, Go, and Rust (`--check` enforced in CI).
 4. **4 Idiomatic SDKs (`sdks/{python,typescript,go,rust}`)**: Thin façades over the generated clients with fail-closed SHA-256 artifact verification.
 5. **Rust CLI (`cli/`)**: Single binary `grad` built on `grad-sdk`.
-6. **Packaging (`server/docker-compose.yml`, `server/helm/grad/`)**: Local Docker Compose stack (`grad local up`: one API, one trainer worker, one eval worker) and production Kubernetes Helm chart with optional KEDA scale-to-zero and air-gapped model/judge overrides.
+6. **Packaging (`server/docker-compose.yml`, `server/helm/grad/`)**: Local Docker Compose stack (`grad local up`: one API, one trainer worker, one eval worker; `--dev-models` adds `grad-dev-inference`, a CPU OpenAI-compatible endpoint for the tiny test models, so evals run locally) and production Kubernetes Helm chart with optional KEDA scale-to-zero and air-gapped model/judge overrides.
 
 ## Failure modes
 

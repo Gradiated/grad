@@ -18,6 +18,8 @@ grad local up --gpu            # add the CUDA trainer (NVIDIA Container Toolkit)
 grad local up --dev-models     # tiny test models that train in seconds (try-it-out only)
 ```
 
+With `--dev-models` the image also runs `grad-dev-inference`: a CPU OpenAI-compatible endpoint that serves the tiny test models, adapters trained on them and a deterministic test judge to the local stack's evals.
+
 **Compose**: `grad local up` writes the compose file it uses to `$XDG_DATA_HOME/gradiated/local/docker-compose.yml`; [`server/docker-compose.yml`](https://github.com/Gradiated/grad/blob/main/server/docker-compose.yml) builds the same stack from a checkout.
 
 **Kubernetes**: the Helm chart in [`server/helm/grad`](https://github.com/Gradiated/grad/tree/main/server/helm/grad) runs a GPU `train` pool (the `-gpu` image) and a CPU `import` pool (the plain image), with optional KEDA scale-to-zero.

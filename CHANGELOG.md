@@ -9,6 +9,20 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Added
 
+- **Evals on `grad local up --dev-models`**: the stack also starts `grad-dev-inference` (the trainer
+  image's `grad-dev-inference` command, compose profile `dev-models`), a CPU OpenAI-compatible
+  `/v1/chat/completions` endpoint, and points the API's and the eval worker's inference and judge
+  URLs at it, so `grad eval` works with no extra flags instead of answering `501
+  inference_unavailable`. It serves `test/tiny-qwen3` and `test/tiny-qwen3-teacher` by catalog id,
+  LoRA and merged artifacts trained on them by artifact id (read from grad-server with the `local`
+  profile's key and checked against `X-Grad-Workspace`), and `test/tiny-judge`, a deterministic
+  judge that scores the word-overlap F1 with the reference answer. Endpoints exported in your shell
+  still win. `grad local up` says so; `tests/compose/smoke.sh` now evals the trained artifact with a
+  validator and the judge and checks the report in the CLI, the Python SDK and the web console
+  (`server/ui/test/live/evals.test.tsx`), and drops its fake OpenAI server.
+- `scripts/check-docs-snippets.py --local` runs the docs' blocks (with and without `--cloud`)
+  against a running `grad local up --dev-models` stack, with catalog models mapped to the dev
+  models and judges to `test/tiny-judge`.
 - **One Grafana dashboard for production, "grad / Training platform"** (`deploy/grafana/grad.json`,
   also the Helm chart's and `grad local up --observability`'s), with sections for the overview,
   queue and scheduling, runs and jobs, workers and GPUs, evals, sources, billing (Cloud), auth,
