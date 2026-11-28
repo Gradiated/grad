@@ -75,6 +75,7 @@ describe("static worker keys", () => {
 
   it("resolves a key to its kinds and identity", () => {
     expect(matchStaticWorkerKey("k-gpu", keys)).toEqual({
+      mode: "static",
       kinds: ["train"],
       identity: "trainer-worker:gpu",
     });
@@ -560,7 +561,11 @@ describe("lease tokens", () => {
     expect(claimGpuMemoryGb(principal, 40)).toBe(40);
     expect(claimGpuMemoryGb(principal, 141)).toBe(80);
     expect(claimGpuMemoryGb(principal, undefined)).toBe(80);
-    const unbound = toAuthPrincipal({ kinds: ["train"], identity: "x" });
+    const unbound = toAuthPrincipal({
+      mode: "static",
+      kinds: ["train"],
+      identity: "x",
+    });
     expect(claimGpuMemoryGb(unbound, 24)).toBe(24);
     expect(claimGpuMemoryGb(unbound, undefined)).toBeNull();
     expect(() =>
@@ -588,7 +593,9 @@ describe("the authenticator chain", () => {
     mode,
     authenticate: async () => {
       if (result === "throw") throw new ApiError(503, "down", "Down", "down");
-      return result === "match" ? { kinds: ["train"], identity: mode } : null;
+      return result === "match"
+        ? { mode, kinds: ["train"], identity: mode }
+        : null;
     },
   });
 

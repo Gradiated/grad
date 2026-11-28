@@ -259,6 +259,7 @@ export const createKubernetesWorkerAuth = (options: {
 
     return {
       kinds,
+      mode: "kubernetes",
       identity: pod ? `k8s:${account}/${pod}` : `k8s:${account}`,
       expiresAt: new Date(expMs),
     };

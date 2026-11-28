@@ -37,6 +37,7 @@ export const createLeaseWorkerAuth = (options: {
       kinds: row.kinds.filter(isKind),
       // Namespaced by orchestrator and host: another orchestrator's (or
       // host's) token with the same lease id never holds this one's jobs.
+      mode: "lease",
       identity: `lease:${row.createdBy.replace(/^orchestrator:/, "")}/${row.hostId}/${row.leaseId}`,
       host: row.hostId,
       lease: row.leaseId,

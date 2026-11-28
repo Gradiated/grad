@@ -188,6 +188,7 @@ export const matchStaticWorkerKey = (
 
   return {
     kinds: key.kinds,
+    mode: "static",
     identity:
       key.label === "trainer"
         ? "trainer-worker"

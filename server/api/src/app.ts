@@ -59,14 +59,6 @@ export const CORS_EXPOSED_HEADERS = [
   "Content-Disposition",
 ];
 
-/** The worker-auth mode behind a principal's identity (WorkerPrincipal.identity). */
-const workerAuthMode = (identity: string): string =>
-  identity.startsWith("k8s:")
-    ? "kubernetes"
-    : identity.startsWith("lease:")
-      ? "lease"
-      : "static";
-
 const problemResponse = (
   c: Context<AppEnv>,
   status: number,
@@ -302,7 +294,7 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     if (workerRoute) {
       metrics.workerAuth.inc(
         principal?.worker
-          ? { mode: workerAuthMode(principal.worker.identity), result: "ok" }
+          ? { mode: principal.worker.mode, result: "ok" }
           : { mode: "none", result: "rejected" },
       );
     }

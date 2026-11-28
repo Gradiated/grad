@@ -13,6 +13,8 @@ export type WorkerAuthMode = (typeof WORKER_AUTH_MODES)[number];
 
 /** What a worker token proves about its bearer. */
 export interface WorkerPrincipal {
+  /** The authenticator that accepted the token. */
+  mode: WorkerAuthMode;
   /** The job kinds it may claim. */
   kinds: readonly JobKind[];
   /** Stable name of the credential (`trainer-worker:<label>`, `k8s:<ns>/<sa>/<pod>`, `lease:<orchestrator>/<host>/<lease>`); fences leases. */
