@@ -46,7 +46,7 @@ jobs:
       - name: Install toolchain via mise
         uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          install_args: node pnpm
+          install_args: node pnpm python
 
       # The S3 store is not a service container: the suite's globalSetup starts
       # one SeaweedFS (gradr8-s3-<pid>, a generated key and its S3 config file
@@ -96,6 +96,26 @@ jobs:
 
       - name: Verify OpenAPI spec is up to date
         run: pnpm -C server/api openapi:check
+
+      # The console's core journeys in a real browser (Chromium headless shell)
+      # against tests/harness/stack.ts with the reference worker: sign in with a
+      # scoped key, a dataset's records, a run followed live to its artifact,
+      # promote and delete, an eval comparing it with its base, URL filters, a
+      # read-only key's refusal, and axe (WCAG 2.1 AA) on every page it opens.
+      - name: Web UI journeys (Playwright)
+        run: |
+          python3 -m pip install "jsonschema==4.26.0"
+          pnpm -C server/ui exec playwright install --with-deps --only-shell chromium
+          pnpm -C server/ui e2e
+
+      - name: Upload the Playwright traces of failed journeys
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-ui-e2e-traces
+          path: server/ui/e2e-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   server-trainer-torch:
     name: Trainer (CPU torch recipes, worker protocol and live worker tests, coverage gate)

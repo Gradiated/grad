@@ -335,6 +335,7 @@ node scripts/generate-sdks.mjs               # regenerate the four SDK transport
 pip install -e "sdks/python[dev]" && python3 -m unittest discover -s sdks/python/tests
 pnpm -C sdks/typescript install --frozen-lockfile && pnpm -C sdks/typescript check
 pnpm -C server/ui install --frozen-lockfile && pnpm -C server/ui check   # web UI (pnpm -C server/ui dev to work on it)
+pnpm -C server/ui exec vite build && pnpm -C server/ui e2e               # web UI journeys in Chromium (needs Docker; first: pnpm -C server/ui exec playwright install --only-shell chromium)
 (cd sdks/go && go test ./...)
 cargo test --workspace                       # Rust SDK + CLI
 
