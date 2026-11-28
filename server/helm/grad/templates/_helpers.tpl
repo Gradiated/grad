@@ -109,7 +109,7 @@ capabilities:
   drop: ["ALL"]
 {{- end -}}
 
-{{/* Fails the render on values that cannot work. */}}
+{{/* Fails the render on values that cannot work (values.schema.json checks keys and types). */}}
 {{- define "grad.validate" -}}
 {{- if not .Values.storage.s3Bucket -}}
 {{- fail "storage.s3Bucket is required: grad-server replicas and workers share artifacts through S3-compatible storage (set storage.s3Endpoint for SeaweedFS, MinIO or R2)." -}}
@@ -117,39 +117,12 @@ capabilities:
 {{- if and (not .Values.secrets.create) (not .Values.secrets.existingSecret) -}}
 {{- fail "secrets.existingSecret is required with secrets.create=false: a Secret with at least a database-url key." -}}
 {{- end -}}
-{{- /* Keys from older docs and chart versions: refuse them instead of ignoring them. */ -}}
-{{- $moved := dict "secret" "secrets.existingSecret (with secrets.create=false)" "auth" "secrets.adminApiKeyHash, or secrets.existingSecret" "trainer" "workers.train (gpuCount, nodeSelector, tolerations) and workerDefaults.image" "judge" "evals.judgeBaseUrl" -}}
-{{- range $key, $instead := $moved -}}
-{{- if hasKey $.Values $key -}}
-{{- fail (printf "values key '%s' is not part of this chart; use %s." $key $instead) -}}
-{{- end -}}
-{{- end -}}
-{{- range $key, $_ := .Values.database -}}
-{{- if ne $key "caBundle" -}}
-{{- fail (printf "values key 'database.%s' is not part of this chart (database holds only caBundle); the URL goes in secrets.databaseUrl, or secrets.existingSecret." $key) -}}
-{{- end -}}
-{{- end -}}
 {{- with .Values.database.caBundle -}}
 {{- if and .pem .configMap.name -}}
 {{- fail "database.caBundle: set configMap.name or pem, not both." -}}
 {{- end -}}
 {{- end -}}
-{{- if not (has (include "grad.workerAuth" .) (list "kubernetes" "static")) -}}
-{{- fail (printf "workers.auth: %q is not kubernetes or static" .Values.workers.auth) -}}
-{{- end -}}
-{{- if hasKey .Values.api "deployMode" -}}
-{{- fail "values key 'api.deployMode' is not part of this chart: self-hosted servers never deploy (deployments are served by Gradiated Cloud)." -}}
-{{- end -}}
-{{- if hasKey .Values.models "mirrorUri" -}}
-{{- fail "values key 'models.mirrorUri' is not part of this chart; use models.mirror." -}}
-{{- end -}}
-{{- if or (hasKey .Values.keda "minReplicaCount") (hasKey .Values.keda "maxReplicaCount") -}}
-{{- fail "values keys 'keda.minReplicaCount'/'keda.maxReplicaCount' are not part of this chart; use keda.workers.<pool>.minReplicaCount/maxReplicaCount (pools: train, import)." -}}
-{{- end -}}
 {{- if .Values.keda.enabled -}}
-{{- if not (has .Values.keda.trigger (list "prometheus" "metrics-api")) -}}
-{{- fail (printf "keda.trigger: %q is not prometheus or metrics-api" .Values.keda.trigger) -}}
-{{- end -}}
 {{- if not .Values.metrics.enabled -}}
 {{- fail "keda.enabled needs metrics.enabled: KEDA reads the queue depth grad-server exports." -}}
 {{- end -}}
@@ -162,11 +135,6 @@ capabilities:
 {{- end -}}
 {{- range $name, $w := omit .Values.workers "auth" -}}
 {{- if $w.enabled -}}
-{{- range $w.kinds -}}
-{{- if not (has . (list "train" "import" "eval")) -}}
-{{- fail (printf "workers.%s.kinds: %q is not a job kind (train, import, eval)" $name .) -}}
-{{- end -}}
-{{- end -}}
 {{- if and (has "eval" $w.kinds) (gt (int $w.gpuCount) 0) -}}
 {{- fail (printf "workers.%s: eval jobs run on CPU workers (they only call the inference endpoint); move kind eval to a pool with gpuCount 0, such as import." $name) -}}
 {{- end -}}

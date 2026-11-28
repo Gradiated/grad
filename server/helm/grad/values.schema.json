@@ -1,0 +1,724 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": {
+      "type": "string"
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "databaseUrl": {
+          "type": "string"
+        },
+        "adminApiKeyHash": {
+          "type": "string"
+        },
+        "secretsKey": {
+          "type": "string"
+        },
+        "inferenceApiKey": {
+          "type": "string"
+        },
+        "judgeApiKey": {
+          "type": "string"
+        },
+        "cloudServiceToken": {
+          "type": "string"
+        },
+        "cloudAuthDatabaseUrl": {
+          "type": "string"
+        },
+        "cloudGatewayToken": {
+          "type": "string"
+        },
+        "metricsToken": {
+          "type": "string"
+        },
+        "awsAccessKeyId": {
+          "type": "string"
+        },
+        "awsSecretAccessKey": {
+          "type": "string"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caBundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              }
+            },
+            "pem": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ClusterIP",
+                "NodePort",
+                "LoadBalancer"
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        },
+        "authMode": {
+          "type": "string",
+          "enum": [
+            "none",
+            "api_key",
+            "cloud"
+          ]
+        },
+        "billingMode": {
+          "type": "string",
+          "enum": [
+            "noop",
+            "cloud"
+          ]
+        },
+        "internalPort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "workerAutoscaling": {
+          "type": [
+            "string",
+            "boolean"
+          ],
+          "enum": [
+            "",
+            true,
+            false
+          ]
+        },
+        "defaultWorkspaceId": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxRunningPerWorkspace": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "train": {
+                  "type": "integer"
+                },
+                "import": {
+                  "type": "integer"
+                },
+                "eval": {
+                  "type": "integer"
+                }
+              }
+            },
+            "maxQueuedPerWorkspace": {
+              "type": "integer"
+            }
+          }
+        },
+        "env": {
+          "type": "object"
+        },
+        "podAnnotations": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "minAvailable": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "backoffLimit": {
+          "type": "integer"
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "s3Bucket": {
+          "type": "string"
+        },
+        "s3Region": {
+          "type": "string"
+        },
+        "s3Endpoint": {
+          "type": "string"
+        },
+        "s3PublicEndpoint": {
+          "type": "string"
+        }
+      }
+    },
+    "evals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inferenceBaseUrl": {
+          "type": "string"
+        },
+        "judgeBaseUrl": {
+          "type": "string"
+        },
+        "concurrency": {
+          "type": "integer"
+        },
+        "workerResources": {
+          "type": "object"
+        }
+      }
+    },
+    "cloud": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "internalApiUrl": {
+          "type": "string"
+        },
+        "jwksUrl": {
+          "type": "string"
+        },
+        "jwtIssuer": {
+          "type": "string"
+        },
+        "billingUrl": {
+          "type": "string"
+        },
+        "pricesUrl": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "corsOrigins": {
+          "type": "string"
+        },
+        "secretsKmsKeyId": {
+          "type": "string"
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mirror": {
+          "type": "string"
+        }
+      }
+    },
+    "workerDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "apiKeySecretKey": {
+          "type": "string"
+        },
+        "pollIntervalSeconds": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "leaseSeconds": {
+          "type": "integer"
+        }
+      }
+    },
+    "workers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/workerPool"
+      },
+      "properties": {
+        "auth": {
+          "type": "string",
+          "enum": [
+            "kubernetes",
+            "static"
+          ]
+        }
+      }
+    },
+    "trainingPriorityClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer"
+        }
+      }
+    },
+    "workerServiceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "workerPort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "requireToken": {
+          "type": "boolean"
+        },
+        "workspaceLabel": {
+          "type": "boolean"
+        },
+        "allowFrom": {
+          "type": "array"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string"
+            },
+            "labels": {
+              "type": "object"
+            }
+          }
+        },
+        "podMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string"
+            },
+            "labels": {
+              "type": "object"
+            }
+          }
+        },
+        "grafanaDashboards": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "type": "object"
+            },
+            "annotations": {
+              "type": "object"
+            }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "type": "object"
+            },
+            "oldestQueuedSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "error5xxRatio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "failureRatio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "failureMinJobs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "usagePushLagSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "usageFlushLagSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "dbErrorRatio": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "keda": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "prometheus",
+            "metrics-api"
+          ]
+        },
+        "prometheus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serverAddress": {
+              "type": "string"
+            },
+            "selector": {
+              "type": "string"
+            }
+          }
+        },
+        "pollingInterval": {
+          "type": "integer"
+        },
+        "cooldownPeriod": {
+          "type": "integer"
+        },
+        "targetOpenJobs": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "workers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "minReplicaCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxReplicaCount": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "properties": {}
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "apiIngressFrom": {
+          "type": "array"
+        },
+        "internalIngressFrom": {
+          "type": "array"
+        },
+        "workerEgress": {
+          "type": "array"
+        },
+        "inferenceEgress": {
+          "type": "array"
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "hosts": {
+          "type": "array"
+        },
+        "tls": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "workerPool": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "train",
+              "import",
+              "eval"
+            ]
+          }
+        },
+        "lowPriority": {
+          "type": "boolean"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          },
+          "required": [
+            "tag"
+          ]
+        },
+        "gpuCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "env": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ]
+        },
+        "apiKeySecretKey": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "kinds",
+        "image",
+        "resources"
+      ]
+    }
+  },
+  "required": [
+    "storage",
+    "secrets",
+    "api",
+    "workers"
+  ]
+}
